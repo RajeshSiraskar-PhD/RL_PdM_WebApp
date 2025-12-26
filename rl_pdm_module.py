@@ -28,7 +28,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict, List, Tuple, Any
 from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
+from sklearn.model_selection import train_test_split
 from sklearn.kernel_ridge import KernelRidge
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.utils import resample
+import joblib
 
 # ==========================================
 # SUPPRESS WARNINGS
@@ -100,14 +104,21 @@ class Config:
         filter_name = ""
         if data_file:
             filter_name = os.path.splitext(os.path.basename(data_file))[0]
+            if filter_name.startswith("temp_"):
+                filter_name = filter_name.replace("temp_", "", 1)
         
         # Determine specific pattern based on agent type
-        if agent_type.upper() == 'REINFORCE':
+        agent_type = agent_type.upper()
+        if agent_type == 'REINFORCE':
             pattern_files = [f for f in files if '_REINFORCE_' in f and '_AM_' not in f]
-        elif agent_type.upper() in ['REINFORCE_AM', 'REINFORCE AM', 'AM']:
+        elif agent_type in ['REINFORCE_AM', 'REINFORCE AM', 'AM']:
             pattern_files = [f for f in files if '_REINFORCE_AM_' in f]
-        elif agent_type.upper() == 'PPO':
+        elif agent_type == 'PPO':
             pattern_files = [f for f in files if '_PPO_' in f]
+        elif agent_type in ['CML_BASIC', 'CML BASIC', 'CML']:
+            pattern_files = [f for f in files if '_CML_Basic_' in f]
+        elif agent_type in ['CML_AM', 'CML AM']:
+            pattern_files = [f for f in files if '_CML_AM_' in f]
         else:
             pattern_files = []
             
@@ -151,6 +162,8 @@ class MT_Env(gym.Env):
     ):
         super().__init__()
         self.data_file = data_file
+        if hasattr(self.data_file, 'seek'):
+            self.data_file.seek(0)
         self.df = pd.read_csv(self.data_file)
         
         # Validate required columns
@@ -883,6 +896,8 @@ def downsample_merged_file(data_file: str, records_per_procedure: int = 30, save
         pd.DataFrame: Downsampled DataFrame.
     """
     try:
+        if hasattr(data_file, 'seek'):
+            data_file.seek(0)
         df = pd.read_csv(data_file)
     except FileNotFoundError:
         print(f"Error: File not found: {data_file}")
@@ -920,6 +935,119 @@ def downsample_merged_file(data_file: str, records_per_procedure: int = 30, save
             print(f"Error saving file: {e}")
             
     return result_df
+
+
+def train_classical_classifier(data_file: str, save_path: str = None, attention_weights: np.ndarray = None) -> Tuple[Any, Dict]:
+    """
+    Train a Random Forest classifier on a balanced version of the dataset.
+    
+    Args:
+        data_file (str): Path to the training CSV file.
+        save_path (str, optional): Path to save the trained model.
+        attention_weights (np.ndarray, optional): Weights to apply to features.
+        
+    Returns:
+        Tuple[RandomForestClassifier, dict]: Trained model and metrics.
+    """
+    model_type_label = "Classical ML (Attention)" if attention_weights is not None else "Classical ML (Basic)"
+    print(f"--- Training {model_type_label} ---")
+    
+    try:
+        if hasattr(data_file, 'seek'):
+            data_file.seek(0)
+        df = pd.read_csv(data_file)
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return None, {}
+        
+    # Features and target
+    features = [
+        'Vib_Spindle', 'Vib_Table', 'Sound_Spindle', 'Sound_table',
+        'X_Load_Cell', 'Y_Load_Cell', 'Z_Load_Cell', 'Current'
+    ]
+    
+    if 'ACTION_CODE' not in df.columns:
+        print("Error: ACTION_CODE column missing. Cannot train classifier.")
+        return None, {}
+        
+    # Drop rows with NaN in features or target
+    train_df = df[features + ['ACTION_CODE']].dropna()
+    
+    X = train_df[features].values
+    y = train_df['ACTION_CODE'].values
+    
+    # Apply attention weights if provided
+    if attention_weights is not None:
+        print(f"  Applying attention weights: {attention_weights}")
+        X = X * attention_weights
+    
+    # Split for a quick validation
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    
+    # Balance the training set (Oversample the minority class)
+    # 0 = CONTINUE, 1 = REPLACE
+    train_data = pd.DataFrame(X_train, columns=features)
+    train_data['ACTION_CODE'] = y_train
+    
+    df_majority = train_data[train_data.ACTION_CODE == 0]
+    df_minority = train_data[train_data.ACTION_CODE == 1]
+    
+    if len(df_minority) == 0:
+        print("Warning: No 'REPLACE' actions (1) in training split. Training on imbalanced set.")
+        X_train_final = X_train
+        y_train_final = y_train
+    else:
+        df_minority_upsampled = resample(
+            df_minority, 
+            replace=True,     # sample with replacement
+            n_samples=len(df_majority),    # to match majority class
+            random_state=42
+        )
+        
+        df_balanced = pd.concat([df_majority, df_minority_upsampled])
+        X_train_final = df_balanced[features].values
+        y_train_final = df_balanced['ACTION_CODE'].values
+        print(f"  Balanced training data: {len(df_balanced)} rows ({len(df_majority)} each class)")
+
+    # Train Random Forest
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train_final, y_train_final)
+    
+    # Evaluate on validation set
+    y_pred = model.predict(X_val)
+    precision = precision_score(y_val, y_pred, average='macro', zero_division=0)
+    recall = recall_score(y_val, y_pred, average='macro', zero_division=0)
+    f1 = f1_score(y_val, y_pred, average='macro', zero_division=0)
+    accuracy = accuracy_score(y_val, y_pred)
+    
+    metrics = {
+        'precision': float(precision),
+        'recall': float(recall),
+        'f1': float(f1),
+        'accuracy': float(accuracy)
+    }
+    
+    print(f"  Val Metrics: Prec={precision:.3f}, Rec={recall:.3f}, F1={f1:.3f}, Acc={accuracy:.3f}")
+    
+    if save_path:
+        try:
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            if attention_weights is not None:
+                # Save as a dict to include weights for evaluation
+                save_obj = {
+                    'model': model,
+                    'attention_weights': attention_weights,
+                    'metrics': metrics
+                }
+                joblib.dump(save_obj, save_path)
+            else:
+                joblib.dump(model, save_path)
+            print(f"Model saved to: {save_path}")
+        except Exception as e:
+            print(f"Error saving model: {e}")
+            
+    return model, metrics
+
 
 # ==========================================
 # PLOTTING FUNCTIONS
@@ -1345,6 +1473,8 @@ def evaluate_single_model(
     print(f"{'='*60}")
     
     # Load test data
+    if hasattr(test_file, 'seek'):
+        test_file.seek(0)
     test_df = pd.read_csv(test_file)
     
     # Validate required columns
@@ -1366,9 +1496,31 @@ def evaluate_single_model(
         model = PPO.load(model_path)
         print(f"PPO model loaded successfully")
         
-        def predict_action(obs):
+        def predict_action(obs, raw_obs=None):
             action, _ = model.predict(obs, deterministic=True)
             return int(action)
+    
+    elif model_type in ['CML', 'CML_AM']:
+        # Load sklearn model using joblib
+        print(f"Loading {model_type} model from: {model_path}")
+        loaded = joblib.load(model_path)
+        
+        if isinstance(loaded, dict) and 'model' in loaded:
+            model = loaded['model']
+            att_weights = loaded.get('attention_weights', None)
+            print(f"Loaded dictionary with model and weights")
+        else:
+            model = loaded
+            att_weights = None
+            print(f"Loaded model object directly")
+            
+        def predict_action(obs, raw_obs=None):
+            # CML models were trained on raw features (potentially weighted)
+            feat = raw_obs if raw_obs is not None else obs
+            if att_weights is not None:
+                feat = feat * att_weights
+            pred = model.predict(feat.reshape(1, -1))
+            return int(pred[0])
     
     else:  # REINFORCE or REINFORCE_AM
         # Load PyTorch model
@@ -1383,7 +1535,7 @@ def evaluate_single_model(
         policy.eval()
         print(f"PyTorch model loaded successfully")
         
-        def predict_action(obs):
+        def predict_action(obs, raw_obs=None):
             with torch.no_grad():
                 state_tensor = torch.FloatTensor(obs).unsqueeze(0)
                 probs = policy(state_tensor)
@@ -1396,7 +1548,6 @@ def evaluate_single_model(
     
     print(f"Processing {len(test_df)} timesteps...")
     
-    
     # Reset environment
     env.reset()
     
@@ -1405,8 +1556,11 @@ def evaluate_single_model(
         env.current_idx = idx
         obs = env.get_observation()
         
+        # Get raw features for CML
+        raw_obs = test_df.iloc[idx][env.features].to_numpy(dtype=np.float32)
+        
         # Predict action
-        action = predict_action(obs)
+        action = predict_action(obs, raw_obs=raw_obs)
         predictions.append(action)
     
     # Convert to numpy arrays
@@ -1446,10 +1600,12 @@ def evaluate_all_models(
     wear_threshold: float = Config.WEAR_THRESHOLD,
     ppo_model_file: str = None,
     reinforce_model_file: str = None,
-    reinforce_am_model_file: str = None
+    reinforce_am_model_file: str = None,
+    cml_basic_model_file: str = None,
+    cml_am_model_file: str = None
 ) -> pd.DataFrame:
     """
-    Evaluate all three trained models on time-series test data.
+    Evaluate all five trained models on time-series test data.
     
     Args:
         test_file: Path to the test CSV file
@@ -1457,6 +1613,8 @@ def evaluate_all_models(
         ppo_model_file: Path to PPO model (optional, searches for latest if None)
         reinforce_model_file: Path to REINFORCE model (optional, searches for latest if None)
         reinforce_am_model_file: Path to REINFORCE with Attention model (optional, searches for latest if None)
+        cml_basic_model_file: Path to Classical ML Basic model (optional)
+        cml_am_model_file: Path to Classical ML Attention model (optional)
     
     Returns:
         DataFrame with evaluation results for all models
@@ -1469,95 +1627,50 @@ def evaluate_all_models(
         reinforce_model_file = Config.get_latest_model('REINFORCE', test_file)
     if reinforce_am_model_file is None:
         reinforce_am_model_file = Config.get_latest_model('REINFORCE_AM', test_file)
+    if cml_basic_model_file is None:
+        cml_basic_model_file = Config.get_latest_model('CML_BASIC', test_file)
+    if cml_am_model_file is None:
+        cml_am_model_file = Config.get_latest_model('CML_AM', test_file)
         
     results = []
     
-    # Evaluate PPO
-    if ppo_model_file and os.path.exists(ppo_model_file):
-        try:
-            metrics = evaluate_single_model(
-                model_path=ppo_model_file,
-                test_file=test_file,
-                model_type='PPO',
-                wear_threshold=wear_threshold
-            )
-            results.append({
-                'Model': 'PPO',
-                'File': os.path.splitext(os.path.basename(ppo_model_file))[0],
-                'Precision': metrics['precision'],
-                'Recall': metrics['recall'],
-                'F1': metrics['f1'],
-                'Accuracy': metrics['accuracy']
-            })
-        except Exception as e:
-            print(f"Error evaluating PPO: {str(e)}")
-            results.append({
-                'Model': 'PPO',
-                'Precision': 0.0,
-                'Recall': 0.0,
-                'F1': 0.0,
-                'Accuracy': 0.0
-            })
-    else:
-        print(f"PPO model not found: {ppo_model_file}")
+    # List of models to evaluate
+    models_to_eval = [
+        ('PPO', ppo_model_file, 'PPO'),
+        ('REINFORCE', reinforce_model_file, 'REINFORCE'),
+        ('REINFORCE with Attention', reinforce_am_model_file, 'REINFORCE_AM'),
+        ('Classical ML (Basic)', cml_basic_model_file, 'CML'),
+        ('Classical ML (Attention)', cml_am_model_file, 'CML_AM')
+    ]
     
-    # Evaluate REINFORCE
-    if os.path.exists(reinforce_model_file):
-        try:
-            metrics = evaluate_single_model(
-                model_path=reinforce_model_file,
-                test_file=test_file,
-                model_type='REINFORCE',
-                wear_threshold=wear_threshold
-            )
-            results.append({
-                'Model': 'REINFORCE',
-                'File': os.path.splitext(os.path.basename(reinforce_model_file))[0],
-                'Precision': metrics['precision'],
-                'Recall': metrics['recall'],
-                'F1': metrics['f1'],
-                'Accuracy': metrics['accuracy']
-            })
-        except Exception as e:
-            print(f"Error evaluating REINFORCE: {str(e)}")
-            results.append({
-                'Model': 'REINFORCE',
-                'Precision': 0.0,
-                'Recall': 0.0,
-                'F1': 0.0,
-                'Accuracy': 0.0
-            })
-    else:
-        print(f"REINFORCE model not found: {reinforce_model_file}")
-    
-    # Evaluate REINFORCE with Attention
-    if os.path.exists(reinforce_am_model_file):
-        try:
-            metrics = evaluate_single_model(
-                model_path=reinforce_am_model_file,
-                test_file=test_file,
-                model_type='REINFORCE_AM',
-                wear_threshold=wear_threshold
-            )
-            results.append({
-                'Model': 'REINFORCE with Attention',
-                'File': os.path.splitext(os.path.basename(reinforce_am_model_file))[0],
-                'Precision': metrics['precision'],
-                'Recall': metrics['recall'],
-                'F1': metrics['f1'],
-                'Accuracy': metrics['accuracy']
-            })
-        except Exception as e:
-            print(f"Error evaluating REINFORCE with Attention: {str(e)}")
-            results.append({
-                'Model': 'REINFORCE with Attention',
-                'Precision': 0.0,
-                'Recall': 0.0,
-                'F1': 0.0,
-                'Accuracy': 0.0
-            })
-    else:
-        print(f"REINFORCE with Attention model not found: {reinforce_am_model_file}")
+    for display_name, model_path, model_type in models_to_eval:
+        if model_path and os.path.exists(model_path):
+            try:
+                metrics = evaluate_single_model(
+                    model_path=model_path,
+                    test_file=test_file,
+                    model_type=model_type,
+                    wear_threshold=wear_threshold
+                )
+                results.append({
+                    'Model': display_name,
+                    'File': os.path.splitext(os.path.basename(model_path))[0],
+                    'Precision': metrics['precision'],
+                    'Recall': metrics['recall'],
+                    'F1': metrics['f1'],
+                    'Accuracy': metrics['accuracy']
+                })
+            except Exception as e:
+                print(f"Error evaluating {display_name}: {str(e)}")
+                results.append({
+                    'Model': display_name,
+                    'Precision': 0.0,
+                    'Recall': 0.0,
+                    'F1': 0.0,
+                    'Accuracy': 0.0
+                })
+        else:
+            print(f"Model path for {display_name} not found or invalid: {model_path}")
     
     # Create DataFrame
     results_df = pd.DataFrame(results)

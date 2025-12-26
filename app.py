@@ -14,7 +14,8 @@ import matplotlib.pyplot as plt
 from rl_pdm_module import (
     train_ppo, REINFORCE, PolicyNetwork, MT_Env, AM_Env,
     plot_metrics, Config, plot_training_live, average_metrics,
-    plot_sensor_data_with_wear, evaluate_single_model, evaluate_all_models
+    plot_sensor_data_with_wear, evaluate_single_model, evaluate_all_models,
+    train_classical_classifier
 )
 
 # Set parameters for REINFORCE agent
@@ -94,30 +95,32 @@ if 'metrics' not in st.session_state:
     st.session_state.metrics = {
         'REINFORCE': None,
         'PPO': None,
-        'REINFORCE_AM': None
+        'REINFORCE_AM': None,
+        'CML_Basic': None,
+        'CML_AM': None
     }
 if 'training_log' not in st.session_state:
     st.session_state.training_log = {
         'REINFORCE': [],
         'PPO': [],
-        'REINFORCE_AM': []
+        'REINFORCE_AM': [],
+        'CML_Basic': [],
+        'CML_AM': []
     }
 if 'averaged_metrics' not in st.session_state:
     st.session_state.averaged_metrics = {
         'REINFORCE': None,
         'PPO': None,
-        'REINFORCE_AM': None
+        'REINFORCE_AM': None,
+        'CML_Basic': None,
+        'CML_AM': None
     }
 if 'sensor_data_plot' not in st.session_state:
     st.session_state.sensor_data_plot = None
 if 'uploaded_data' not in st.session_state:
     st.session_state.uploaded_data = None
-if 'evaluation_metrics' not in st.session_state:
-    st.session_state.evaluation_metrics = {
-        'PPO': None,
-        'REINFORCE': None,
-        'REINFORCE_AM': None
-    }
+if 'evaluation_results' not in st.session_state:
+    st.session_state.evaluation_results = []
 
 # --- Helper Functions for Dummy Logic ---
 
@@ -149,6 +152,10 @@ def train_reinforce_agent(data_file: str, data_file_name: str, episodes: int = 5
         # Train
         metrics = agent.learn(total_episodes=episodes)
         
+        # --- Train Classical ML Baseline (Basic) ---
+        cml_save_path = save_path.replace('_REINFORCE_', '_CML_Basic_') if save_path else None
+        cml_model, cml_metrics = train_classical_classifier(data_file=data_file, save_path=cml_save_path)
+        
         # Store metrics and calculate averages
         st.session_state.metrics['REINFORCE'] = metrics
         st.session_state.averaged_metrics['REINFORCE'] = {
@@ -157,6 +164,19 @@ def train_reinforce_agent(data_file: str, data_file_name: str, episodes: int = 5
             'avg_replacements': float(np.nanmean(metrics['replacements'])),
             'avg_margin': float(np.nanmean([m for m in metrics['margins'] if not np.isnan(m)]))
         }
+        
+        # Store CML Basic metrics if available
+        if cml_metrics:
+            st.session_state.metrics['CML_Basic'] = cml_metrics
+            st.session_state.averaged_metrics['CML_Basic'] = {
+                'avg_reward': 0, 'avg_violations': 0, 'avg_replacements': 0, # Not applicable for static CML
+                'avg_margin': 0,
+                'precision': cml_metrics['precision'],
+                'recall': cml_metrics['recall'],
+                'f1': cml_metrics['f1'],
+                'accuracy': cml_metrics['accuracy']
+            }
+
         st.session_state.training_log['REINFORCE'].append({
             'timestamp': pd.Timestamp.now(),
             'metrics': metrics,
@@ -190,6 +210,10 @@ def train_ppo_agent(data_file: str, data_file_name: str, episodes: int = 50, sav
             data_file_name=data_file_name
         )
         
+        # --- Train Classical ML Baseline (Basic) ---
+        cml_save_path = save_path.replace('_PPO_', '_CML_Basic_') if save_path else None
+        cml_model, cml_metrics = train_classical_classifier(data_file=data_file, save_path=cml_save_path)
+
         # Store metrics and calculate averages
         st.session_state.metrics['PPO'] = metrics
         st.session_state.averaged_metrics['PPO'] = {
@@ -198,6 +222,19 @@ def train_ppo_agent(data_file: str, data_file_name: str, episodes: int = 50, sav
             'avg_replacements': float(np.nanmean(metrics['replacements'])),
             'avg_margin': float(np.nanmean([m for m in metrics['margins'] if not np.isnan(m)]))
         }
+        
+        # Store CML Basic metrics if available
+        if cml_metrics:
+            st.session_state.metrics['CML_Basic'] = cml_metrics
+            st.session_state.averaged_metrics['CML_Basic'] = {
+                'avg_reward': 0, 'avg_violations': 0, 'avg_replacements': 0,
+                'avg_margin': 0,
+                'precision': cml_metrics['precision'],
+                'recall': cml_metrics['recall'],
+                'f1': cml_metrics['f1'],
+                'accuracy': cml_metrics['accuracy']
+            }
+
         st.session_state.training_log['PPO'].append({
             'timestamp': pd.Timestamp.now(),
             'metrics': metrics,
@@ -241,6 +278,18 @@ def train_reinforce_am_agent(data_file: str, data_file_name: str, episodes: int 
         # Train
         metrics = agent.learn(total_episodes=episodes)
         
+        # --- Train Classical ML Baseline (Basic) ---
+        cml_basic_path = save_path.replace('_REINFORCE_AM_', '_CML_Basic_') if save_path else None
+        cml_basic_model, cml_basic_metrics = train_classical_classifier(data_file=data_file, save_path=cml_basic_path)
+        
+        # --- Train Classical ML (Attention) ---
+        cml_am_path = save_path.replace('_REINFORCE_AM_', '_CML_AM_') if save_path else None
+        cml_am_model, cml_am_metrics = train_classical_classifier(
+            data_file=data_file, 
+            save_path=cml_am_path,
+            attention_weights=env.attention_weights
+        )
+        
         # Store metrics and calculate averages
         st.session_state.metrics['REINFORCE_AM'] = metrics
         st.session_state.averaged_metrics['REINFORCE_AM'] = {
@@ -249,6 +298,28 @@ def train_reinforce_am_agent(data_file: str, data_file_name: str, episodes: int 
             'avg_replacements': float(np.nanmean(metrics['replacements'])),
             'avg_margin': float(np.nanmean([m for m in metrics['margins'] if not np.isnan(m)]))
         }
+        
+        # Store CML metrics
+        if cml_basic_metrics:
+            st.session_state.metrics['CML_Basic'] = cml_basic_metrics
+            st.session_state.averaged_metrics['CML_Basic'] = {
+                'avg_reward': 0.0, 'avg_violations': 0.0, 'avg_replacements': 0.0, 'avg_margin': 0.0,
+                'precision': cml_basic_metrics['precision'],
+                'recall': cml_basic_metrics['recall'],
+                'f1': cml_basic_metrics['f1'],
+                'accuracy': cml_basic_metrics['accuracy']
+            }
+        
+        if cml_am_metrics:
+            st.session_state.metrics['CML_AM'] = cml_am_metrics
+            st.session_state.averaged_metrics['CML_AM'] = {
+                'avg_reward': 0.0, 'avg_violations': 0.0, 'avg_replacements': 0.0, 'avg_margin': 0.0,
+                'precision': cml_am_metrics['precision'],
+                'recall': cml_am_metrics['recall'],
+                'f1': cml_am_metrics['f1'],
+                'accuracy': cml_am_metrics['accuracy']
+            }
+
         st.session_state.training_log['REINFORCE_AM'].append({
             'timestamp': pd.Timestamp.now(),
             'metrics': metrics,
@@ -278,36 +349,24 @@ def generate_eval_metrics():
 # HELPER FUNCTION FOR EVALUATION TABLE
 # ==========================================
 def display_evaluation_table():
-    """Display evaluation metrics table for all three models."""
+    """Display evaluation metrics table for all models in session state."""
     
+    if not st.session_state.evaluation_results:
+        st.info("No evaluation results to display.")
+        return
+        
     # Prepare data for table
     models_data = []
-    model_names = {
-        'PPO': 'PPO',
-        'REINFORCE': 'REINFORCE',
-        'REINFORCE_AM': 'REINFORCE with Attention'
-    }
     
-    for model_key, display_name in model_names.items():
-        metrics = st.session_state.evaluation_metrics.get(model_key)
-        if metrics is not None:
-            models_data.append({
-                'Model': display_name,
-                'File': metrics.get('file', 'N/A'),
-                'Precision': f"{metrics['precision']:.4f}",
-                'Recall': f"{metrics['recall']:.4f}",
-                'F1': f"{metrics['f1']:.4f}",
-                'Accuracy': f"{metrics['accuracy']:.4f}"
-            })
-        else:
-            models_data.append({
-                'Model': display_name,
-                'File': 'N/A',
-                'Precision': 'N/A',
-                'Recall': 'N/A',
-                'F1': 'N/A',
-                'Accuracy': 'N/A'
-            })
+    for row in st.session_state.evaluation_results:
+        models_data.append({
+            'Model': row.get('Model', 'Unknown'),
+            'File': row.get('File', 'N/A'),
+            'Precision': f"{row['Precision']:.4f}",
+            'Recall': f"{row['Recall']:.4f}",
+            'F1': f"{row['F1']:.4f}",
+            'Accuracy': f"{row['Accuracy']:.4f}"
+        })
     
     # Create HTML table with highlighting
     html_table = """
@@ -333,11 +392,11 @@ def display_evaluation_table():
         'accuracy': []
     }
     
-    for model_key in model_names.keys():
-        metrics = st.session_state.evaluation_metrics.get(model_key)
-        if metrics is not None:
-            for metric_key in numeric_metrics.keys():
-                numeric_metrics[metric_key].append(metrics[metric_key])
+    for m in st.session_state.evaluation_results:
+        for metric_key in numeric_metrics.keys():
+            val = m.get(metric_key.capitalize())
+            if val is not None:
+                numeric_metrics[metric_key].append(val)
     
     best_values = {}
     for metric_key, values in numeric_metrics.items():
@@ -387,6 +446,8 @@ with st.sidebar:
         # Auto-generate sensor data visualization
         if st.session_state.uploaded_data is None or st.session_state.uploaded_data.name != train_file.name:
             try:
+                if hasattr(train_file, 'seek'):
+                    train_file.seek(0)
                 df = pd.read_csv(train_file)
                 st.session_state.uploaded_data = train_file
                 st.session_state.sensor_data_plot = plot_sensor_data_with_wear(
@@ -458,7 +519,9 @@ with st.sidebar:
     available_metrics = sum([
         st.session_state.metrics['REINFORCE'] is not None,
         st.session_state.metrics['PPO'] is not None,
-        st.session_state.metrics['REINFORCE_AM'] is not None
+        st.session_state.metrics['REINFORCE_AM'] is not None,
+        st.session_state.metrics['CML_Basic'] is not None,
+        st.session_state.metrics['CML_AM'] is not None
     ])
     
     # Button 4: Compare Agents (enabled only when at least 2 metrics available)
@@ -488,6 +551,10 @@ with st.sidebar:
     if st.button('Evaluate Trained Models', use_container_width=True, disabled=eval_file is None):
         st.session_state.view_mode = 'evaluation_all'
     
+    # NEW Button: Evaluate the 5 Latest Saved Models
+    if st.button('Evaluate Saved Models', use_container_width=True, disabled=eval_file is None):
+        st.session_state.view_mode = 'evaluation_saved'
+    
     if eval_file is None:
         st.caption("ℹ️ Select evaluation dataset to proceed")
 
@@ -496,7 +563,7 @@ with st.sidebar:
 # ==========================================
 
 st.markdown("<h1 style='color: #0066b2;'>Reinforcement Learning for Predictive Maintenance</h1>", unsafe_allow_html=True)
-st.markdown("V.2.5 - 26-Dec-2025")
+st.markdown("V.3.0 - Classical ML - 26-Dec-2025")
 st.markdown("---")
 
 # Container for the dynamic right column content
@@ -560,18 +627,17 @@ with main_container:
         
         # Get available metrics (ordered: PPO, REINFORCE, REINFORCE_AM)
         available_agents = []
-        if st.session_state.metrics['PPO'] is not None:
-            available_agents.append('PPO')
-        if st.session_state.metrics['REINFORCE'] is not None:
-            available_agents.append('REINFORCE')
-        if st.session_state.metrics['REINFORCE_AM'] is not None:
-            available_agents.append('REINFORCE_AM')
+        for agent in ['PPO', 'REINFORCE', 'REINFORCE_AM', 'CML_Basic', 'CML_AM']:
+            if st.session_state.metrics[agent] is not None:
+                available_agents.append(agent)
         
         # Display names mapping
         agent_display_names = {
             'REINFORCE': 'REINFORCE',
             'PPO': 'PPO',
-            'REINFORCE_AM': 'REINFORCE with Attention'
+            'REINFORCE_AM': 'REINFORCE with Attention',
+            'CML_Basic': 'Classical ML (Basic)',
+            'CML_AM': 'Classical ML (Attention)'
         }
         
         if len(available_agents) >= 2:
@@ -584,7 +650,11 @@ with main_container:
                 'avg_reward': 'Average Reward',
                 'avg_violations': 'Violation Rate',
                 'avg_replacements': 'Replacement Rate',
-                'avg_margin': 'Wear Margin'
+                'avg_margin': 'Wear Margin',
+                'precision': 'Precision (Val)',
+                'recall': 'Recall (Val)',
+                'f1': 'F1 Score (Val)',
+                'accuracy': 'Accuracy (Val)'
             }
             
             # Build HTML table with fixed column widths
@@ -613,7 +683,7 @@ with main_container:
                 
                 for i, agent in enumerate(available_agents):
                     value = st.session_state.averaged_metrics[agent].get(metric_key, np.nan)
-                    if np.isnan(value):
+                    if value is None or (isinstance(value, float) and np.isnan(value)) or (metric_key.startswith('avg_') and agent.startswith('CML') and value == 0):
                         value_str = "N/A"
                     else:
                         value_str = f"{value:.3f}"
@@ -840,9 +910,9 @@ with main_container:
             st.info("No training logs available yet. Train an agent to generate logs.")
 
 
-    # --- Evaluation View: All Models ---
+    # --- Evaluation View: All Models (Matched to Dataset) ---
     elif st.session_state.view_mode == 'evaluation_all':
-        st.subheader("Evaluation Results: All Models")
+        st.subheader("Evaluation Results: All Models (Dataset Matched)")
         
         if eval_file:
             st.toast(f"Evaluating on: {eval_file.name}", icon="🚀", duration=2)
@@ -854,11 +924,13 @@ with main_container:
                 with open(temp_path, "wb") as f:
                     f.write(eval_file.getbuffer())
                     
-                with st.spinner("Running evaluation on all models... This might take a moment."):
-                    # Dynamically find latest models before evaluation
-                    latest_ppo = Config.get_latest_model('PPO')
-                    latest_rf = Config.get_latest_model('REINFORCE')
-                    latest_rf_am = Config.get_latest_model('REINFORCE_AM')
+                with st.spinner("Running evaluation on best matched models..."):
+                    # Dynamically find latest models before evaluation (matched to dataset name)
+                    latest_ppo = Config.get_latest_model('PPO', temp_path)
+                    latest_rf = Config.get_latest_model('REINFORCE', temp_path)
+                    latest_rf_am = Config.get_latest_model('REINFORCE_AM', temp_path)
+                    latest_cml = Config.get_latest_model('CML_BASIC', temp_path)
+                    latest_cml_am = Config.get_latest_model('CML_AM', temp_path)
                     
                     import io
                     from contextlib import redirect_stdout
@@ -868,42 +940,19 @@ with main_container:
                         results_df = evaluate_all_models(
                             test_file=temp_path,
                             wear_threshold=Config.WEAR_THRESHOLD,
-                            ppo_model_file=latest_ppo if latest_ppo else ppo_model_file,
-                            reinforce_model_file=latest_rf if latest_rf else model_file,
-                            reinforce_am_model_file=latest_rf_am if latest_rf_am else reinforce_am_model_file
+                            ppo_model_file=latest_ppo if latest_ppo else None,
+                            reinforce_model_file=latest_rf if latest_rf else None,
+                            reinforce_am_model_file=latest_rf_am if latest_rf_am else None,
+                            cml_basic_model_file=latest_cml if latest_cml else None,
+                            cml_am_model_file=latest_cml_am if latest_cml_am else None
                         )
                     captured_output = f.getvalue()
                 
                 # Update session state with all metrics
-                for _, row in results_df.iterrows():
-                    model_name = row['Model']
-                    if model_name == 'PPO':
-                        st.session_state.evaluation_metrics['PPO'] = {
-                            'file': row.get('File', 'N/A'),
-                            'precision': row['Precision'],
-                            'recall': row['Recall'],
-                            'f1': row['F1'],
-                            'accuracy': row['Accuracy']
-                        }
-                    elif model_name == 'REINFORCE':
-                        st.session_state.evaluation_metrics['REINFORCE'] = {
-                            'file': row.get('File', 'N/A'),
-                            'precision': row['Precision'],
-                            'recall': row['Recall'],
-                            'f1': row['F1'],
-                            'accuracy': row['Accuracy']
-                        }
-                    elif model_name == 'REINFORCE with Attention':
-                        st.session_state.evaluation_metrics['REINFORCE_AM'] = {
-                            'file': row.get('File', 'N/A'),
-                            'precision': row['Precision'],
-                            'recall': row['Recall'],
-                            'f1': row['F1'],
-                            'accuracy': row['Accuracy']
-                        }
+                st.session_state.evaluation_results = results_df.to_dict('records')
                 
                 # Display metrics table
-                st.markdown("### 🏆 Model Comparison")
+                st.markdown("### Model Comparison")
                 display_evaluation_table()
                 
                 # Display detailed logs
@@ -914,10 +963,72 @@ with main_container:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
                 
-                st.success("✅ All models evaluated successfully!")
+                st.success("✅ Models matching dataset evaluated successfully!")
                     
             except Exception as e:
                 st.error(f"Error during evaluation: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+        else:
+            st.warning("⚠️ Please upload an evaluation dataset in the sidebar to proceed.")
+
+    # --- NEW Evaluation View: 5 Latest Models (Global) ---
+    elif st.session_state.view_mode == 'evaluation_saved':
+        st.subheader("Evaluation Results: 5 Latest Saved Models")
+        
+        if eval_file:
+            st.toast(f"Evaluating on: {eval_file.name}", icon="🚀", duration=2)
+            
+            # Save uploaded file to a temporary location
+            try:
+                os.makedirs("data", exist_ok=True)
+                temp_path = os.path.join("data", f"temp_{eval_file.name}")
+                with open(temp_path, "wb") as f:
+                    f.write(eval_file.getbuffer())
+                    
+                with st.spinner("Finding and evaluating the 5 latest models..."):
+                    # Find absolute latest models (ignore dataset name)
+                    latest_ppo = Config.get_latest_model('PPO')
+                    latest_rf = Config.get_latest_model('REINFORCE')
+                    latest_rf_am = Config.get_latest_model('REINFORCE_AM')
+                    latest_cml = Config.get_latest_model('CML_BASIC')
+                    latest_cml_am = Config.get_latest_model('CML_AM')
+                    
+                    import io
+                    from contextlib import redirect_stdout
+                    
+                    f = io.StringIO()
+                    with redirect_stdout(f):
+                        results_df = evaluate_all_models(
+                            test_file=temp_path,
+                            wear_threshold=Config.WEAR_THRESHOLD,
+                            ppo_model_file=latest_ppo,
+                            reinforce_model_file=latest_rf,
+                            reinforce_am_model_file=latest_rf_am,
+                            cml_basic_model_file=latest_cml,
+                            cml_am_model_file=latest_cml_am
+                        )
+                    captured_output = f.getvalue()
+                
+                # Update session state with all metrics
+                st.session_state.evaluation_results = results_df.to_dict('records')
+                
+                # Display metrics table
+                st.markdown("### Model Comparison (Global Latest)")
+                display_evaluation_table()
+                
+                # Display detailed logs
+                with st.expander("📄 View Detailed Evaluation Logs", expanded=False):
+                    st.text(captured_output)
+                
+                # Clean up temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                
+                st.success("✅ 5 latest saved models evaluated successfully!")
+                    
+            except Exception as e:
+                st.error(f"Error during global evaluation: {str(e)}")
                 import traceback
                 st.code(traceback.format_exc())
         else:
