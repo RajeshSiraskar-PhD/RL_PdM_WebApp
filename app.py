@@ -408,10 +408,15 @@ with st.sidebar:
         step=10
     )
     
-    # Update model paths dynamically based on current episodes input
-    model_file = Config.get_model_path('REINFORCE', episodes)
-    ppo_model_file = Config.get_model_path('PPO', episodes)
-    reinforce_am_model_file = Config.get_model_path('REINFORCE_AM', episodes)
+    # Update model paths dynamically based on current episodes input and uploaded file
+    if train_file:
+        model_file = Config.get_model_path('REINFORCE', episodes, data_file=train_file.name)
+        ppo_model_file = Config.get_model_path('PPO', episodes, data_file=train_file.name)
+        reinforce_am_model_file = Config.get_model_path('REINFORCE_AM', episodes, data_file=train_file.name)
+    else:
+        model_file = Config.get_model_path('REINFORCE', episodes)
+        ppo_model_file = Config.get_model_path('PPO', episodes)
+        reinforce_am_model_file = Config.get_model_path('REINFORCE_AM', episodes)
     
     learning_rate = st.number_input(
         "Learning Rate (α)",
@@ -491,7 +496,7 @@ with st.sidebar:
 # ==========================================
 
 st.markdown("<h1 style='color: #0066b2;'>Reinforcement Learning for Predictive Maintenance</h1>", unsafe_allow_html=True)
-st.markdown("V.2.2 - 24-Dec-2025")
+st.markdown("V.2.5 - 26-Dec-2025")
 st.markdown("---")
 
 # Container for the dynamic right column content
@@ -676,7 +681,41 @@ with main_container:
                 ax.legend(loc='best', fontsize=9)
             
             plt.tight_layout(rect=[0, 0, 1, 0.96])
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
             st.pyplot(fig)
+            
+            # Save artifacts
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1:
+                if st.button("💾 Save Comparison", key="save_compare_main"):
+                    try:
+                        os.makedirs('saved_plots', exist_ok=True)
+                        date_str = pd.Timestamp.now().strftime('%d%m')
+                        
+                        # 1. Save Plot
+                        plot_filename = f"Comparison_plot_{date_str}.png"
+                        plot_path = os.path.join('saved_plots', plot_filename)
+                        fig.savefig(plot_path, dpi=150, bbox_inches='tight')
+                        
+                        # 2. Save Metrics Table
+                        csv_filename = f"Comparison_metrics_{date_str}.csv"
+                        csv_path = os.path.join('saved_plots', csv_filename)
+                        
+                        # Construct DataFrame for saving
+                        csv_data = []
+                        for agent in available_agents:
+                            row = {'Agent': agent}
+                            for metric_key, metric_display in metric_names.items():
+                                val = st.session_state.averaged_metrics[agent].get(metric_key, np.nan)
+                                row[metric_display] = val
+                            csv_data.append(row)
+                        
+                        pd.DataFrame(csv_data).to_csv(csv_path, index=False)
+                        
+                        st.success(f"✅ Saved:\n- Plot: {plot_filename}\n- Metrics: {csv_filename}")
+                        
+                    except Exception as e:
+                        st.error(f"Error saving comparison artifacts: {str(e)}")
         else:
             st.warning("Not enough agents trained for comparison. Train at least 2 agents.")
     

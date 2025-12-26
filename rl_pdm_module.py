@@ -48,7 +48,7 @@ class Config:
     """Configuration parameters for RL training and evaluation."""
     
     # Data and Model Paths
-    SENSOR_DATA: str = 'PROC_9'
+    SENSOR_DATA: str = 'x'
     DATA_FILE: str = f'data/{SENSOR_DATA}.csv'
     
     # Reward Configuration
@@ -57,7 +57,7 @@ class Config:
     R3_VIOLATION: float = 100.0                  # Large penalty for crossing threshold (increased from 50)
     R4_REPLACE_BONUS: float = 10.0              # Bonus for replacing (new)
     AMR: float = 5e-2                           # Advantage Mixing Ratio for Attention
-    VIOLATION_MARGIN: float = 1.0               # Violation margin - set to 1.0 to flag threshold crossing immediately
+    VIOLATION_MARGIN: float = 0.05               # Violation margin - set to 5% over threshold
     
     # Training Configuration
     WEAR_THRESHOLD: float = 290.0               # Wear threshold
@@ -72,23 +72,36 @@ class Config:
     SAVE_MODEL: bool = True
     
     @classmethod
-    def get_model_path(cls, agent_type: str, episodes: int = None) -> str:
-        """Get path for a model file based on agent type and episode count."""
+    def get_model_path(cls, agent_type: str, episodes: int = None, data_file: str = None) -> str:
+        """Get path for a model file based on agent type, episode count, and data file name."""
         eps = episodes if episodes is not None else cls.EPISODES
+        
+        # Use provided data_file name or fallback to SENSOR_DATA
+        if data_file:
+            data_name = os.path.splitext(os.path.basename(data_file))[0]
+        else:
+            data_name = cls.SENSOR_DATA
+            
         ext = 'zip' if agent_type.upper() == 'PPO' else 'h5'
-        return f'models/{cls.SENSOR_DATA}_{agent_type}_Model_{eps}.{ext}'
+        # Add date suffix (DDMM)
+        date_str = pd.Timestamp.now().strftime('%d%m')
+        return f'models/{data_name}_{agent_type}_Model_{eps}_{date_str}.{ext}'
 
     @classmethod
-    def get_latest_model(cls, agent_type: str) -> str:
-        """Find the latest trained model file for a specific agent type in models/ folder."""
+    def get_latest_model(cls, agent_type: str, data_file: str = None) -> str:
+        """Find the latest trained model file for a specific agent type and optional data file in models/ folder."""
         models_dir = 'models'
         if not os.path.exists(models_dir):
             return ""
             
         files = [f for f in os.listdir(models_dir) if f.endswith(('.h5', '.zip'))]
         
+        # If data_file is provided, filter by its base name
+        filter_name = ""
+        if data_file:
+            filter_name = os.path.splitext(os.path.basename(data_file))[0]
+        
         # Determine specific pattern based on agent type
-        # For REINFORCE, avoid matching AM
         if agent_type.upper() == 'REINFORCE':
             pattern_files = [f for f in files if '_REINFORCE_' in f and '_AM_' not in f]
         elif agent_type.upper() in ['REINFORCE_AM', 'REINFORCE AM', 'AM']:
@@ -98,6 +111,10 @@ class Config:
         else:
             pattern_files = []
             
+        # Further filter by data file name if provided
+        if filter_name:
+            pattern_files = [f for f in pattern_files if f.startswith(filter_name)]
+            
         if not pattern_files:
             return ""
             
@@ -106,9 +123,11 @@ class Config:
         latest_file = max(full_paths, key=os.path.getmtime)
         return latest_file
 
-    REINFORCE_MODEL: str = f'models/{SENSOR_DATA}_REINFORCE_Model_{EPISODES}.h5'
-    REINFORCE_AM_MODEL: str = f'models/{SENSOR_DATA}_REINFORCE_AM_Model_{EPISODES}.h5'
-    PPO_MODEL: str = f'models/{SENSOR_DATA}_PPO_Model_{EPISODES}.zip'
+    # Keep these as placeholders or remove if not used elsewhere
+    # (Note: app.py uses get_model_path instead of these static strings usually)
+    REINFORCE_MODEL: str = 'models/PROC_9_REINFORCE_Model_200.h5'
+    REINFORCE_AM_MODEL: str = 'models/PROC_9_REINFORCE_AM_Model_200.h5'
+    PPO_MODEL: str = 'models/PROC_9_PPO_Model_200.zip'
 
 # ==========================================
 # ENVIRONMENTS
@@ -127,7 +146,8 @@ class MT_Env(gym.Env):
         wear_threshold: float = Config.WEAR_THRESHOLD,
         r1: float = Config.R1_CONTINUE,
         r2: float = Config.R2_REPLACE,
-        r3: float = Config.R3_VIOLATION
+        r3: float = Config.R3_VIOLATION,
+        violation_margin: float = Config.VIOLATION_MARGIN
     ):
         super().__init__()
         self.data_file = data_file
@@ -143,8 +163,21 @@ class MT_Env(gym.Env):
                 raise ValueError(f"Missing required column in data file: {c}")
         
         self.tool_wear_series = pd.to_numeric(self.df["tool_wear"], errors="coerce").to_numpy()
-        if np.any(np.isnan(self.tool_wear_series)):
-            raise ValueError("Non-numeric or missing values found in 'tool_wear' column.")
+        # Calculate Useful Life (UL)
+        # UL = 0 at wear threshold, maximizing at start
+        # Find the first index where wear exceeds threshold
+        wear_exceeded = self.df[self.df["tool_wear"] >= wear_threshold]
+        if not wear_exceeded.empty:
+            threshold_idx = wear_exceeded.index[0]
+        else:
+            threshold_idx = len(self.df) - 1 # Fallback if never exceeds
+            
+        # Create UL column: counts down from threshold_idx
+        self.df['UL'] = threshold_idx - self.df.index
+        # Note: UL will be negative after threshold
+        
+        # Store Max UL (at index 0) for metric calculation
+        self.max_ul = float(self.df.iloc[0]['UL'])
         
         # Feature compatibility with Attention Environment
         self.features = [
@@ -167,6 +200,7 @@ class MT_Env(gym.Env):
         self.r1 = float(r1)
         self.r2 = float(r2)
         self.r3 = float(r3)
+        self.violation_margin = float(violation_margin)
         
         # Gym spaces
         obs_low = np.full((8,), -np.finfo(np.float32).max, dtype=np.float32)
@@ -212,14 +246,20 @@ class MT_Env(gym.Env):
         
         tool_wear = self._get_tool_wear(self.current_idx)
         reward = 0.0
-        info = {'violation': False, 'replacement': False, 'margin': np.nan}
+        info = {'violation': False, 'replacement': False, 'margin': np.nan, 'UL': np.nan}
+        
+        # Define violation threshold: threshold + 5%
+        violation_threshold = self.wear_threshold * (1 + self.violation_margin)
         
         if action == 0:  # CONTINUE
-            if tool_wear > self.wear_threshold * 1.05:
+            if tool_wear > violation_threshold:
                 reward = -self.r3
                 self.done = True
                 info['violation'] = True
                 info['margin'] = self._compute_margin(self.current_idx)
+                # Calculate Consumed UL (Productive Time): Max - Current Remaining
+                current_ul_val = float(self.df.iloc[self.current_idx]['UL'])
+                info['UL'] = self.max_ul - current_ul_val
                 self._last_terminal_margin = info['margin']
                 obs = self.get_observation()
                 return obs, float(reward), True, False, info
@@ -232,6 +272,9 @@ class MT_Env(gym.Env):
                 else:
                     self.done = True
                     info['margin'] = self._compute_margin(self.current_idx)
+                    # Calculate Consumed UL (Productive Time)
+                    current_ul_val = float(self.df.iloc[self.current_idx]['UL'])
+                    info['UL'] = self.max_ul - current_ul_val
                     self._last_terminal_margin = info['margin']
                     obs = self.get_observation()
                     return obs, float(reward), True, False, info
@@ -239,18 +282,28 @@ class MT_Env(gym.Env):
         else:  # REPLACE_TOOL (action == 1)
             info['replacement'] = True
             info['margin'] = self._compute_margin(self.current_idx)
-            if tool_wear > self.wear_threshold:
-                reward = -self.r3
-                # Even if late, it's a "replacement action", not a "failure to act" violation
-                info['violation'] = False 
+            
+            # Check if replacement is late (violation)
+            if tool_wear > violation_threshold:
+                reward = -self.r3  # Severe penalty for late replacement
+                info['violation'] = True
+            elif tool_wear > self.wear_threshold:
+                # Late but within 5% buffer
+                reward = -self.r3 * 0.2  # Moderate penalty
+                info['violation'] = False
             else:
+                # TIMELY replacement or EARLY replacement
                 used_fraction = np.clip(tool_wear / self.wear_threshold, 0.0, 1.0)
                 unused_fraction = 1.0 - used_fraction
                 # Improved replacement reward: provide a positive bonus weighted by wear
                 reward = Config.R4_REPLACE_BONUS * used_fraction - self.r2 * unused_fraction
                 info['violation'] = False
+                
             self.done = True
             self._last_terminal_margin = info['margin']
+            # Calculate Consumed UL (Productive Time)
+            current_ul_val = float(self.df.iloc[self.current_idx]['UL'])
+            info['UL'] = self.max_ul - current_ul_val
             obs = self.get_observation()
             return obs, float(reward), True, False, info
     
@@ -261,7 +314,7 @@ class MT_Env(gym.Env):
         self.done = False
         self._last_terminal_margin = np.nan
         obs = self.get_observation()
-        info = {'violation': False, 'replacement': False, 'margin': np.nan}
+        info = {'violation': False, 'replacement': False, 'margin': np.nan, 'UL': np.nan}
         return obs, info
     
     def render(self, mode="human"):
@@ -290,9 +343,10 @@ class AM_Env(MT_Env):
         r1: float = Config.R1_CONTINUE,
         r2: float = Config.R2_REPLACE,
         r3: float = Config.R3_VIOLATION,
+        violation_margin: float = Config.VIOLATION_MARGIN,
         kr_alpha: float = 1.0
     ):
-        super().__init__(data_file, wear_threshold, r1, r2, r3)
+        super().__init__(data_file, wear_threshold, r1, r2, r3, violation_margin)
         
         # Prepare training data for KernelRidge
         vals_df = self.df[self.features].astype(np.float32)
@@ -426,6 +480,7 @@ class REINFORCE:
         all_violations = []
         all_replacements = []
         all_margins = []
+        all_uls = []
         
         # Try to import Streamlit for live visualization
         try:
@@ -446,7 +501,7 @@ class REINFORCE:
             obs, _ = self.env.reset()
             done = False
             
-            episode_info = {'violation': 0, 'replacement': 0, 'margin': np.nan}
+            episode_info = {'violation': 0, 'replacement': 0, 'margin': np.nan, 'UL': np.nan}
             
             while not done:
                 state_tensor = torch.FloatTensor(obs).unsqueeze(0)
@@ -467,12 +522,15 @@ class REINFORCE:
                     episode_info['replacement'] = 1
                 if not np.isnan(info.get('margin')):
                     episode_info['margin'] = info.get('margin')
+                if not np.isnan(info.get('UL')):
+                    episode_info['UL'] = info.get('UL')
             
             # Collect metrics
             all_rewards.append(sum(rewards))
             all_violations.append(episode_info['violation'])
             all_replacements.append(episode_info['replacement'])
             all_margins.append(episode_info['margin'])
+            all_uls.append(episode_info['UL'])
             
             # Calculate discounted returns
             returns = []
@@ -508,7 +566,8 @@ class REINFORCE:
                         "rewards": all_rewards,
                         "violations": all_violations,
                         "replacements": all_replacements,
-                        "margins": all_margins
+                        "margins": all_margins,
+                        "uls": all_uls
                     }
                     fig = plot_training_live(
                         current_metrics,
@@ -520,6 +579,21 @@ class REINFORCE:
                     )
                     with plot_placeholder.container():
                         st.pyplot(fig, use_container_width=True)
+                    
+                    # Save the final plot if it's the last episode
+                    if (episode + 1) == total_episodes and self.model_file:
+                        try:
+                            plot_dir = 'saved_plots'
+                            os.makedirs(plot_dir, exist_ok=True)
+                            # model_file is like 'models/Data_REINFORCE_Model_800_DDMM.h5'
+                            # We want 'saved_plots/Data_REINFORCE_plot_800_DDMM.png'
+                            base_name = os.path.basename(self.model_file)
+                            plot_name = base_name.replace('Model', 'plot').replace('.h5', '.png')
+                            plot_path = os.path.join(plot_dir, plot_name)
+                            fig.savefig(plot_path)
+                            print(f"Training plot saved to: {plot_path}")
+                        except Exception as e:
+                            print(f"Error saving training plot: {str(e)}")
                     
                     plt.close(fig)  # Free memory
                 else:
@@ -555,7 +629,8 @@ class REINFORCE:
             "rewards": all_rewards,
             "violations": all_violations,
             "replacements": all_replacements,
-            "margins": all_margins
+            "margins": all_margins,
+            "uls": all_uls
         }
 
 # ==========================================
@@ -570,6 +645,7 @@ class MetricsCallback(BaseCallback):
         self.violations = []
         self.replacements = []
         self.margins = []
+        self.uls = []
         self.episode_reward = 0.0
     
     def _on_step(self) -> bool:
@@ -582,6 +658,7 @@ class MetricsCallback(BaseCallback):
             self.violations.append(1 if info.get('violation') else 0)
             self.replacements.append(1 if info.get('replacement') else 0)
             self.margins.append(info.get('margin', np.nan))
+            self.uls.append(info.get('UL', np.nan))
             self.episode_reward = 0.0
         return True
 
@@ -630,6 +707,7 @@ def train_ppo(
             callback.violations.append(1 if info.get('violation') else 0)
             callback.replacements.append(1 if info.get('replacement') else 0)
             callback.margins.append(info.get('margin', np.nan))
+            callback.uls.append(info.get('UL', np.nan))
             callback.episode_reward = 0.0
             ep_count += 1
             obs, _ = env.reset()
@@ -652,7 +730,8 @@ def train_ppo(
                         "rewards": callback.rewards,
                         "violations": callback.violations,
                         "replacements": callback.replacements,
-                        "margins": callback.margins
+                        "margins": callback.margins,
+                        "uls": callback.uls
                     }
                     fig = plot_training_live(
                         current_metrics,
@@ -665,6 +744,21 @@ def train_ppo(
                     with plot_placeholder.container():
                         st.pyplot(fig, use_container_width=True)
                     
+                    # Save the final plot if training is complete
+                    if ep_count >= total_episodes and model_file:
+                        try:
+                            plot_dir = 'saved_plots'
+                            os.makedirs(plot_dir, exist_ok=True)
+                            # model_file is like 'models/Data_PPO_Model_800_DDMM.zip'
+                            # We want 'saved_plots/Data_PPO_plot_800_DDMM.png'
+                            base_name = os.path.basename(model_file)
+                            plot_name = base_name.replace('Model', 'plot').replace('.zip', '.png')
+                            plot_path = os.path.join(plot_dir, plot_name)
+                            fig.savefig(plot_path)
+                            print(f"Training plot saved to: {plot_path}")
+                        except Exception as e:
+                            print(f"Error saving training plot: {str(e)}")
+                            
                     plt.close(fig)  # Free memory
                 else:
                     if (ep_count) % 5 == 0 or ep_count >= total_episodes:
@@ -694,7 +788,8 @@ def train_ppo(
         "rewards": callback.rewards,
         "violations": callback.violations,
         "replacements": callback.replacements,
-        "margins": callback.margins
+        "margins": callback.margins,
+        "uls": callback.uls
     }
 
 # ==========================================
@@ -773,6 +868,58 @@ def average_metrics(
     print("-" * 64)
     
     return metrics
+
+
+def downsample_merged_file(data_file: str, records_per_procedure: int = 30, save_path: str = None) -> pd.DataFrame:
+    """
+    Downsample a merged CSV file preserving order, keeping 'records_per_procedure' for each 'PROC'.
+    
+    Args:
+        data_file (str): Path to the input CSV file.
+        records_per_procedure (int): Number of records to keep for each procedure (default 30).
+        save_path (str, optional): Path to save the downsampled CSV.
+        
+    Returns:
+        pd.DataFrame: Downsampled DataFrame.
+    """
+    try:
+        df = pd.read_csv(data_file)
+    except FileNotFoundError:
+        print(f"Error: File not found: {data_file}")
+        return pd.DataFrame()
+        
+    if 'PROC' not in df.columns:
+        print("Error: Input file must contain 'PROC' column.")
+        return df
+    
+    # Get unique procedures while preserving order of appearance
+    procedures = df['PROC'].unique()
+    
+    downsampled_dfs = []
+    print(f"Downsampling {data_file}...")
+    
+    for proc in procedures:
+        proc_df = df[df['PROC'] == proc]
+        # Keep first N records
+        subset = proc_df.iloc[:records_per_procedure]
+        downsampled_dfs.append(subset)
+        print(f"  Processed {proc}: kept {len(subset)}/{len(proc_df)} rows")
+    
+    if not downsampled_dfs:
+        return pd.DataFrame()
+        
+    result_df = pd.concat(downsampled_dfs)
+    
+    print(f"Total rows: {len(result_df)}")
+    
+    if save_path:
+        try:
+            result_df.to_csv(save_path, index=False)
+            print(f"Saved downsampled data to: {save_path}")
+        except Exception as e:
+            print(f"Error saving file: {e}")
+            
+    return result_df
 
 # ==========================================
 # PLOTTING FUNCTIONS
@@ -971,14 +1118,23 @@ def plot_training_live(
             'trend': False
         },
         {
-            'data': 'replacements',
+            'data': 'uls', # Changed from 'replacements'
             'ax': axs[1, 0],
-            'title': 'Replacements per Episode',
-            'ylabel': 'Replacement Count',
+            'title': 'Productive Useful Life (UL) at Replacement', # Changed title
+            'ylabel': 'Productive Life (steps)', # Changed label
             'color': '#2ca02c',
-            'smooth': False,
-            'trend': False
+            'smooth': True, # Changed to True for better visualization
+            'trend': True
         },
+        # {
+        #     'data': 'replacements',
+        #     'ax': axs[1, 0],
+        #     'title': 'Replacements per Episode',
+        #     'ylabel': 'Replacement Count',
+        #     'color': '#2ca02c',
+        #     'smooth': False,
+        #     'trend': False
+        # },
         {
             'data': 'margins',
             'ax': axs[1, 1],
@@ -1121,6 +1277,9 @@ def plot_sensor_data_with_wear(df, data_file_name, smoothing=None):
         # Set light grey background for tool wear plot
         if feature_name == 'tool_wear':
             ax.set_facecolor('#f5f5f5')  # Light grey background
+            # Add threshold line
+            ax.axhline(y=Config.WEAR_THRESHOLD, color='red', linestyle='--', alpha=0.4, label='Wear Threshold')
+            ax.legend(loc='upper left', fontsize=10)
 
         # Apply smoothing if specified, but not for tool_wear
         if smoothing is not None and smoothing > 0 and feature_name != 'tool_wear':
@@ -1236,7 +1395,7 @@ def evaluate_single_model(
     ground_truth = test_df['ACTION_CODE'].values
     
     print(f"Processing {len(test_df)} timesteps...")
-    print(f"Ground truth distribution: {np.bincount(ground_truth.astype(int))}")
+    
     
     # Reset environment
     env.reset()
@@ -1255,9 +1414,8 @@ def evaluate_single_model(
     ground_truth = np.array(ground_truth)
     
     # Debug: Show prediction distribution
-    # print(f"Prediction distribution: {np.bincount(predictions.astype(int))}")
-    # print(f"Unique predictions: {np.unique(predictions)}")
-    # print(f"Unique ground truth: {np.unique(ground_truth)}")
+    print(f'Ground truth: Classes: {np.unique(ground_truth)} | distribution: {np.bincount(ground_truth.astype(int))}')
+    print(f'Prediction:   Classes: {np.unique(predictions)} | distribution: {np.bincount(predictions.astype(int))}')
     
     # Calculate metrics
     precision = precision_score(ground_truth, predictions, average='macro', zero_division=0)
@@ -1286,9 +1444,9 @@ def evaluate_single_model(
 def evaluate_all_models(
     test_file: str,
     wear_threshold: float = Config.WEAR_THRESHOLD,
-    ppo_model_file: str = Config.PPO_MODEL,
-    reinforce_model_file: str = Config.REINFORCE_MODEL,
-    reinforce_am_model_file: str = Config.REINFORCE_AM_MODEL
+    ppo_model_file: str = None,
+    reinforce_model_file: str = None,
+    reinforce_am_model_file: str = None
 ) -> pd.DataFrame:
     """
     Evaluate all three trained models on time-series test data.
@@ -1296,17 +1454,26 @@ def evaluate_all_models(
     Args:
         test_file: Path to the test CSV file
         wear_threshold: Tool wear threshold for environment
-        ppo_model_file: Path to PPO model
-        reinforce_model_file: Path to REINFORCE model
-        reinforce_am_model_file: Path to REINFORCE with Attention model
+        ppo_model_file: Path to PPO model (optional, searches for latest if None)
+        reinforce_model_file: Path to REINFORCE model (optional, searches for latest if None)
+        reinforce_am_model_file: Path to REINFORCE with Attention model (optional, searches for latest if None)
     
     Returns:
         DataFrame with evaluation results for all models
     """
+    
+    # If paths not provided, try to find latest for this test file
+    if ppo_model_file is None:
+        ppo_model_file = Config.get_latest_model('PPO', test_file)
+    if reinforce_model_file is None:
+        reinforce_model_file = Config.get_latest_model('REINFORCE', test_file)
+    if reinforce_am_model_file is None:
+        reinforce_am_model_file = Config.get_latest_model('REINFORCE_AM', test_file)
+        
     results = []
     
     # Evaluate PPO
-    if os.path.exists(ppo_model_file):
+    if ppo_model_file and os.path.exists(ppo_model_file):
         try:
             metrics = evaluate_single_model(
                 model_path=ppo_model_file,
