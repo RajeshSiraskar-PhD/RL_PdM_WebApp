@@ -950,7 +950,9 @@ def train_HSD_model(data_file: str, save_path: str = None, attention_weights: np
     Returns:
         Tuple[RandomForestClassifier, dict]: Trained model and metrics.
     """
-    model_type_label = "HSD (Attention)" if attention_weights is not None else "HSD (Basic)"
+    # $$$
+    # model_type_label = "HSD (Attention)" if attention_weights is not None else "HSD (Basic)"
+    model_type_label = "REINFORCE* (Attention)" if attention_weights is not None else "REINFORCE* (Basic)"
     print(f"--- Training {model_type_label} ---")
     
     try:
@@ -1640,8 +1642,10 @@ def evaluate_all_models(
         ('PPO', ppo_model_file, 'PPO'),
         ('REINFORCE', reinforce_model_file, 'REINFORCE'),
         ('REINFORCE with Attention', reinforce_am_model_file, 'REINFORCE_AM'),
-        ('HSD (Basic)', HSD_Basic_model_file, 'HSD'),
-        ('HSD (Attention)', HSD_AM_model_file, 'HSD_AM')
+        ('REINFORCE*', HSD_Basic_model_file, 'HSD'),
+        ('REINFORCE* (Attention)', HSD_AM_model_file, 'HSD_AM')
+        # ('HSD (Basic)', HSD_Basic_model_file, 'HSD'),
+        # ('HSD (Attention)', HSD_AM_model_file, 'HSD_AM')
     ]
     
     for display_name, model_path, model_type in models_to_eval:

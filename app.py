@@ -563,7 +563,7 @@ with st.sidebar:
 # ==========================================
 
 st.markdown("<h1 style='color: #0066b2;'>Reinforcement Learning for Predictive Maintenance</h1>", unsafe_allow_html=True)
-st.markdown("V.0.31 - Hidden State Design - 27-Dec-2025")
+st.markdown("V.0.4 - Hidden State Design - 27-Dec-2025")
 st.markdown("---")
 
 # Container for the dynamic right column content
@@ -631,13 +631,13 @@ with main_container:
             if st.session_state.metrics[agent] is not None:
                 available_agents.append(agent)
         
-        # Display names mapping
+        # Display names mapping $$$ ² ✲
         agent_display_names = {
             'REINFORCE': 'REINFORCE',
             'PPO': 'PPO',
             'REINFORCE_AM': 'REINFORCE with Attention',
-            'HSD_Basic': 'HSD ML (Basic)',
-            'HSD_AM': 'HSD ML (Attention)'
+            'HSD_Basic': 'REINFORCE*',
+            'HSD_AM': 'REINFORCE* with Attention'
         }
         
         if len(available_agents) >= 2:
@@ -1005,8 +1005,6 @@ with main_container:
                             ppo_model_file=latest_ppo,
                             reinforce_model_file=latest_rf,
                             reinforce_am_model_file=latest_rf_am,
-                            # HSD_Basic_model_file=latest_HSD,
-                            # cml_am_model_file=latest_HSD_AM
                             HSD_Basic_model_file=latest_HSD,
                             HSD_AM_model_file=latest_HSD_AM
                         )
