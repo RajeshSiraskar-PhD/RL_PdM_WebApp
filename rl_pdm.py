@@ -319,8 +319,11 @@ class REINFORCEAgent:
         training_failed = False
         failed_episode = None
         
-        # Calculate update interval (update every 10% of episodes)
-        update_interval = max(1, episodes // 10)
+        # Calculate live plot update frequency interval (Intelligent Update)
+        if episodes < 100:
+            update_interval = 10
+        else:
+            update_interval = max(1, episodes // 10)
         
         try:
             for episode in range(episodes):
@@ -733,8 +736,12 @@ def train_ppo_agent(env: MT_Env, episodes: int, callback=None) -> PPO:
             self.current_episode = 0
             self.episode_reward = 0
             self.episode_info = {'replacements': 0, 'violations': 0, 'margins': []}
-            # Calculate update interval (update every 10% of episodes, matching REINFORCE)
-            self.update_interval = max(1, total_episodes // 10)
+            
+            # Calculate update interval (Intelligent Update)
+            if total_episodes < 100:
+                self.update_interval = 10
+            else:
+                self.update_interval = max(1, total_episodes // 10)
         
         def _on_step(self):
             # Accumulate rewards
@@ -784,7 +791,8 @@ def train_ppo_agent(env: MT_Env, episodes: int, callback=None) -> PPO:
     training_callback = TrainingCallback(callback, episodes)
     
     # Train for same number of timesteps as episodes (matching REINFORCE for fair comparison)
-    total_timesteps = episodes
+    # total_timesteps = episodes * steps_per_episode
+    total_timesteps = episodes * env.total_steps
     
     model.learn(total_timesteps=total_timesteps, callback=training_callback, progress_bar=False)
     
@@ -809,6 +817,10 @@ def evaluate_agent(agent, env: MT_Env, num_episodes: int = 10) -> Dict:
     total_violations = []
     total_margins = []
     
+    # Classification metrics tracking
+    y_true = []
+    y_pred = []
+    
     for _ in range(num_episodes):
         obs, _ = env.reset()
         done = False
@@ -825,6 +837,16 @@ def evaluate_agent(agent, env: MT_Env, num_episodes: int = 10) -> Dict:
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             episode_reward += reward
+            
+            # For classification evaluation
+            # If the CSV has ACTION_CODE, compare agent's replacement decision
+            if 'ACTION_CODE' in env.data.columns:
+                # current_step has already been incremented in env.step(), 
+                # so the actual index for the action taken is current_step - 1
+                idx = env.current_step - 1
+                if idx < len(env.data):
+                    y_true.append(int(env.data.iloc[idx]['ACTION_CODE']))
+                    y_pred.append(int(action))
         
         total_rewards.append(episode_reward)
         total_replacements.append(env.total_replacements)
@@ -833,12 +855,34 @@ def evaluate_agent(agent, env: MT_Env, num_episodes: int = 10) -> Dict:
         avg_margin = np.mean(env.wear_margins) if len(env.wear_margins) > 0 else 0
         total_margins.append(avg_margin)
     
+    # Calculate classification metrics if data was available
+    accuracy = precision = recall = f1 = 0.0
+    if len(y_true) > 0:
+        y_true_arr = np.array(y_true)
+        y_pred_arr = np.array(y_pred)
+        
+        # Accuracy
+        accuracy = np.mean(y_true_arr == y_pred_arr)
+        
+        # Precision, Recall, F1 for class 1 (REPLACE)
+        tp = np.sum((y_true_arr == 1) & (y_pred_arr == 1))
+        fp = np.sum((y_true_arr == 0) & (y_pred_arr == 1))
+        fn = np.sum((y_true_arr == 1) & (y_pred_arr == 0))
+        
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
     return {
         'avg_reward': np.mean(total_rewards),
         'avg_replacements': np.mean(total_replacements),
         'avg_violations': np.mean(total_violations),
         'avg_margin': np.mean(total_margins),
-        'std_reward': np.std(total_rewards)
+        'std_reward': np.std(total_rewards),
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1
     }
 
 

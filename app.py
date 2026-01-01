@@ -2,7 +2,7 @@
 Reinforcement Learning for Predictive Maintenance
 Author: Rajesh Siraskar
 Date: 01-Jan-2026
-V.1.0 - New Year - new version
+V.0.4 - 01-Jan-2026 - PPO correction
 """
 
 import streamlit as st
@@ -149,7 +149,7 @@ def training_callback(agent, episode, total_episodes):
         st.session_state.plot_placeholder.pyplot(fig)
         
         # Small delay to allow UI to update
-        time.sleep(0.1)
+        # time.sleep(0.1)
 
 
 # ============================================================================
@@ -235,7 +235,7 @@ def main():
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.0.1 - 01-Jan-2026')
+    st.markdown(' - V.0.4 - 01-Jan-2026 - PPO Correction')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
@@ -404,12 +404,40 @@ def main():
             
             # Display results table
             eval_df = pd.DataFrame(eval_results)
-            eval_df = eval_df[['Agent', 'avg_reward', 'avg_replacements', 
-                              'avg_violations', 'avg_margin', 'std_reward']]
-            eval_df.columns = ['Agent', 'Avg Reward', 'Avg Replacements', 
-                              'Avg Violations', 'Avg Margin', 'Std Reward']
+            # Reorder and rename columns for display
+            cols_order = ['Agent', 'avg_reward', 'accuracy', 'precision', 'recall', 'f1', 
+                         'avg_replacements', 'avg_violations', 'avg_margin']
             
-            st.table(eval_df)
+            # Ensure all requested columns exist in DF
+            available_cols = [c for c in cols_order if c in eval_df.columns]
+            eval_df = eval_df[available_cols]
+            
+            # Formatting mapping
+            rename_map = {
+                'Agent': 'Agent',
+                'avg_reward': 'Avg Reward',
+                'accuracy': 'Accuracy',
+                'precision': 'Precision',
+                'recall': 'Recall',
+                'f1': 'F1 Score',
+                'avg_replacements': 'Avg Replacements',
+                'avg_violations': 'Avg Violations',
+                'avg_margin': 'Avg Margin'
+            }
+            
+            eval_df.rename(columns=rename_map, inplace=True)
+            
+            # Display formatted table
+            st.table(eval_df.style.format({
+                'Avg Reward': '{:.2f}',
+                'Accuracy': '{:.4f}',
+                'Precision': '{:.4f}',
+                'Recall': '{:.4f}',
+                'F1 Score': '{:.4f}',
+                'Avg Replacements': '{:.2f}',
+                'Avg Violations': '{:.2f}',
+                'Avg Margin': '{:.2f}'
+            }))
             
             # Show best agent
             best_agent = eval_df.loc[eval_df['Avg Reward'].idxmax()]
