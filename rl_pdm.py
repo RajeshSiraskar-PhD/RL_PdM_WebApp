@@ -1,6 +1,7 @@
 """
 RL-based Predictive Maintenance Module
 Custom Gymnasium environment and RL algorithms for milling machine tool wear prediction
+V.2.0 - Attempt-1 to improve Attention 
 """
 
 import numpy as np
@@ -464,7 +465,7 @@ class AttentionPolicyNetwork(nn.Module):
             nn.Linear(obs_dim, obs_dim),
             nn.Tanh(),
             nn.Linear(obs_dim, obs_dim),
-            nn.Softmax(dim=-1)
+            nn.Sigmoid()
         )
         
         # Policy network
@@ -907,10 +908,18 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
         margins_smooth = smooth_curve(agent.episode_margins)
         
         # Plot all metrics
-        axes[0, 0].plot(episodes, rewards_smooth, color=color, label=agent_name, linewidth=1)
-        axes[0, 1].plot(episodes, replacements_smooth, color=color, label=agent_name, linewidth=1)
-        axes[1, 0].plot(episodes, violations_smooth, color=color, label=agent_name, linewidth=1)
-        axes[1, 1].plot(episodes, margins_smooth, color=color, label=agent_name, linewidth=1)
+        # Plot all metrics (raw + smoothed)
+        # Raw data (faint)
+        axes[0, 0].plot(episodes, agent.episode_rewards, color=color, alpha=0.3, linewidth=1)
+        axes[0, 1].plot(episodes, agent.episode_replacements, color=color, alpha=0.3, linewidth=1)
+        axes[1, 0].plot(episodes, agent.episode_violations, color=color, alpha=0.3, linewidth=1)
+        axes[1, 1].plot(episodes, agent.episode_margins, color=color, alpha=0.3, linewidth=1)
+        
+        # Smoothed data (solid)
+        axes[0, 0].plot(episodes, rewards_smooth, color=color, label=agent_name, linewidth=1.5)
+        axes[0, 1].plot(episodes, replacements_smooth, color=color, label=agent_name, linewidth=1.5)
+        axes[1, 0].plot(episodes, violations_smooth, color=color, label=agent_name, linewidth=1.5)
+        axes[1, 1].plot(episodes, margins_smooth, color=color, label=agent_name, linewidth=1.5)
     
     # Configure subplots
     axes[0, 0].set_title('Episode Rewards')
@@ -947,8 +956,8 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
         color='#2C3E50'
     )
     fig.text(
-        0.4, 0.96,
-        f"{title_suffix}",
+        0.25, 0.96,
+        f"[{title_suffix}]",
         ha='left',
         fontsize=12,
         fontfamily='monospace',
@@ -1026,7 +1035,7 @@ def train_ppo_agent(env: MT_Env, episodes: int, callback=None) -> PPO:
     # Create PPO agent
     model = PPO("MlpPolicy", env, verbose=0, 
                 learning_rate=LEARNING_RATE,
-                n_steps=2048,
+                n_steps=512,
                 batch_size=64,
                 gamma=GAMMA)
     
