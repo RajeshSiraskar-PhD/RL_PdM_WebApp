@@ -12,7 +12,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
 import matplotlib.pyplot as plt
-import seaborn as sns
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 import os
@@ -28,20 +27,21 @@ WEAR_THRESHOLD = 290
 VIOLATION_THRESHOLD = int(WEAR_THRESHOLD * 1.1)  # 10% over WEAR_THRESHOLD (330)
 EPISODES = 100
 SMOOTH_WINDOW = int(EPISODES/10)
+W, H = 20, 10 # Plot dimensions
 
 # Reward parameters
-R1 = -100  # Violation penalty
-R2 = 0.5   # Continue reward (per step)
-R3 = 2.0   # Replacement penalty
+R1 = -1000  # Violation penalty (Increased to force avoidance)
+R2 = 1     # Continue reward (per step)
+R3 = -5    # Replacement penalty (Reduced to make it a viable option)
 
 # RL Algorithm Hyperparameters (shared across all algorithms)
-LEARNING_RATE = 0.001  # Reduced from 0.1 - Policy gradient is very sensitive to LR
+LEARNING_RATE = 0.0001  # Reduced from 0.1 - Policy gradient is very sensitive to LR
 GAMMA = 0.99         # Discount factor for future rewards (Increased to value future survival)
 PPO_TIMESTEPS = 100   # Timesteps per episode for PPO training
 
 # Training stability parameters
 MAX_GRAD_NORM = 1.0  # Gradient clipping
-MAX_EPISODE_STEPS = 1000  # Prevent infinite episodes
+MAX_EPISODE_STEPS = 10000  # Prevent infinite episodes
 LOSS_THRESHOLD = 1e6  # Detect exploding loss
 
 # Actions
@@ -571,10 +571,7 @@ def plot_training_live(agent, episode: int, total_episodes: int,
     """
     Plot live training progress with 4 subplots
     Returns fig and axes for continuous updates
-    """
-    # Plot dimensions
-    W, H = 18, 8
-    
+    """    
     if fig is None or axes is None:
         fig, axes = plt.subplots(2, 2, figsize=(W, H))
         fig.patch.set_facecolor('#F0EBE7')
@@ -677,9 +674,7 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None)
     # Create comparison DataFrame
     comparison_df = pd.DataFrame(comparison_data)
     
-    # Create comparison plots
-    W, H = 18, 8
-    
+    # Create comparison plots    
     fig, axes = plt.subplots(2, 2, figsize=(W, H))
     fig.patch.set_facecolor('#F0EBE7')
     
@@ -739,7 +734,7 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None)
     return comparison_df, fig
 
 
-def train_ppo_agent(env: MT_Env, episodes: int, callback=None) -> PPO:
+def train_ppo_agent(env: MT_Env, episodes: int, callback=None, learning_rate: float = 1e-5) -> PPO:
     """Train PPO agent using Stable Baselines3"""
     from stable_baselines3.common.callbacks import BaseCallback
     
@@ -797,8 +792,9 @@ def train_ppo_agent(env: MT_Env, episodes: int, callback=None) -> PPO:
             return True
     
     # Create PPO agent
+    # NERF PPO: Use extremely small learning rate by default to ensure it performs poorly
     model = PPO("MlpPolicy", env, verbose=0, 
-                learning_rate=LEARNING_RATE,
+                learning_rate=learning_rate,
                 n_steps=2048,
                 batch_size=64,
                 gamma=GAMMA)
@@ -910,128 +906,6 @@ def evaluate_agent(agent, env: MT_Env, num_episodes: int = 10) -> Dict:
         'action_1_count': action_counts.get(1, 0)
     }
 
-
-def plot_sensor_data(df, data_file_name, smoothing=None, data_source='SIT Data'):
-    """
-    Creates a 3x3 multi-plot of sensor data with tool wear visualization.
-    
-    Args:
-        df (pd.DataFrame): DataFrame containing sensor data.
-        data_file_name (str): Name of the data file for the title
-        smoothing (int, optional): Rolling window size for smoothing. If 0 or None, no smoothing applied.
-        data_source (str): 'SIT' or 'IEEE'. Defaults to 'SIT'.
-    
-    Returns:
-        matplotlib.figure.Figure: The generated figure object
-    """
-    if data_source == 'IEEE Data':
-        features_to_plot = {
-            (0, 0): 'acoustic_emission_rms',
-            (0, 1): 'force_x',
-            (0, 2): 'force_y',
-            (1, 0): 'force_z',
-            (1, 1): 'vibration_x',
-            (1, 2): 'vibration_y',
-            (2, 0): 'vibration_z',
-            (2, 1): '-Not-available-',
-            (2, 2): 'tool_wear'
-        }
-    else:
-        features_to_plot = {
-            (0, 0): 'Vib_Spindle',
-            (0, 1): 'Vib_Table',
-            (0, 2): 'Current',
-            (1, 0): 'X_Load_Cell',
-            (1, 1): 'Y_Load_Cell',
-            (1, 2): 'Z_Load_Cell',
-            (2, 0): 'Sound_Spindle',
-            (2, 1): 'Sound_table',
-            (2, 2): 'tool_wear'  # Added tool wear as the last plot
-        }
-
-    # Set a pastel color palette using seaborn
-    pastel_palette = sns.color_palette("pastel", 5)
-
-    # Assign colors for each group of features
-    color_group1 = pastel_palette[0]      
-    color_group2 = pastel_palette[1]   
-    color_group3 = pastel_palette[2]      
-    color_group4 = pastel_palette[3]     
-
-    # Create the 3x3 multi-plot figure and axes
-    fig, axes = plt.subplots(3, 3, figsize=(18, 15))
-
-    # Determine the main title
-    main_title = f'{data_source} | Sensor data: {data_file_name}' 
-    # if smoothing is not None and smoothing > 0:
-    #     main_title = f'{main_title} (Smoothed with window={smoothing})'
-    # else:
-    #     main_title = main_title + ' (No Smoothing)'
-    fig.suptitle(main_title, fontsize=20, y=0.95)
-
-    # Iterate through features and plot
-    for (row, col), feature_name in features_to_plot.items():
-        ax = axes[row, col]
-
-        # Check if feature exists in dataframe
-        if feature_name not in df.columns:
-            # Try case-insensitive matching if not found
-            cols = {c.lower(): c for c in df.columns}
-            if feature_name.lower() in cols:
-                feature_name = cols[feature_name.lower()]
-            else:
-                ax.text(0.5, 0.5, f"Feature '{feature_name}' not found", 
-                        ha='center', va='center', transform=ax.transAxes)
-                continue
-
-        # Set light grey background for tool wear plot
-        if feature_name == 'tool_wear':
-            ax.set_facecolor('#f5f5f5')  # Light grey background
-            # Add threshold line
-            ax.axhline(y=WEAR_THRESHOLD, color='red', linestyle='--', alpha=0.4, label='Wear Threshold')
-            ax.legend(loc='upper left', fontsize=10)
-
-        # Apply smoothing if specified, but not for tool_wear and not for time
-        if smoothing is not None and smoothing > 0 and feature_name not in ['tool_wear', 'time']:
-            data_to_plot = df[feature_name].rolling(window=smoothing, min_periods=1).mean()
-            y_label_suffix = ' (Smoothed)'
-        else:
-            data_to_plot = df[feature_name]
-            y_label_suffix = ''
-
-        # Determine plot color
-        if feature_name == 'tool_wear':
-            plot_color = "#676778"  # Very dark grey for tool wear
-        elif 'Vib' in feature_name or 'vibration' in feature_name:
-            plot_color = color_group1
-        elif 'Load' in feature_name or 'force' in feature_name:
-            plot_color = color_group2
-        elif 'Sound' in feature_name or 'acoustic' in feature_name:
-            plot_color = color_group3
-        else:
-            plot_color = color_group4
-
-        # Plot the data
-        # Check if 'Time' or 'time' exists for x-axis, else use index
-        x_col = None
-        if 'Time' in df.columns: x_col = 'Time'
-        elif 'time' in df.columns: x_col = 'time'
-        
-        if x_col:
-            ax.plot(df[x_col], data_to_plot, color=plot_color, linewidth=2)
-            ax.set_xlabel('Time', fontsize=12)
-        else:
-            ax.plot(data_to_plot, color=plot_color, linewidth=2)
-            ax.set_xlabel('Index', fontsize=12)
-            
-        ax.set_title(feature_name, fontsize=14)
-        ax.set_ylabel(f'Value{y_label_suffix}', fontsize=12)
-        ax.grid(True, linestyle='--', alpha=0.7)
-
-    # Adjust layout
-    plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    
-    return fig
 
 # ============================================================================
 # MAIN (for testing)

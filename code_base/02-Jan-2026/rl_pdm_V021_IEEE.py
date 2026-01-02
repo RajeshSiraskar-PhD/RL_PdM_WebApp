@@ -933,7 +933,7 @@ def plot_sensor_data(df, data_file_name, smoothing=None, data_source='SIT Data')
             (1, 1): 'vibration_x',
             (1, 2): 'vibration_y',
             (2, 0): 'vibration_z',
-            (2, 1): '-Not-available-',
+            (2, 1): 'acoustic_emission_rms',
             (2, 2): 'tool_wear'
         }
     else:

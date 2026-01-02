@@ -2,7 +2,7 @@
 Reinforcement Learning for Predictive Maintenance
 Author: Rajesh Siraskar
 Date: 01-Jan-2026
-V.0.3 - 02-Jan-2026 - IEEE Sensor data
+V.0.4 - 01-Jan-2026 - PPO correction
 """
 
 import streamlit as st
@@ -18,7 +18,7 @@ import pickle
 # Import RL module
 from rl_pdm import (
     MT_Env, REINFORCEAgent, train_ppo_agent, 
-    plot_training_live, compare_agents, evaluate_agent, plot_sensor_data,
+    plot_training_live, compare_agents, evaluate_agent,
     WEAR_THRESHOLD, VIOLATION_THRESHOLD, EPISODES, R1, R2, R3
 )
 
@@ -156,18 +156,22 @@ def training_callback(agent, episode, total_episodes):
 # MAIN APPLICATION
 # ============================================================================
 def main():
+    # ========================================================================
     # SIDEBAR - CONTROLS
+    # ========================================================================
     with st.sidebar:
+    
+        # ========================================================================
         # LEFT PANEL - CONTROLS
+        # ========================================================================
+        
+        # ====================================================================
         # SECTION 1: AGENT TRAINING
+        # ====================================================================
         st.subheader("Agent Training")
-        
-        # Data Data Source Selection
-        data_source = st.radio('Data source', ['SIT Data', 'IEEE Data'], index=0, horizontal=True)
-        
         # File uploader for training data
         training_file = st.file_uploader(
-            "Upload Sensor Data",
+            "Upload Sensor Data (CSV)",
             type=['csv'],
             key='training_file_uploader',
             help="CSV file with sensor features and tool_wear"
@@ -188,8 +192,6 @@ def main():
         )
         
         # Training buttons
-        auto_rl_btn = st.button("AutoRL ⏩", use_container_width=True)
-        st.markdown("---")
         train_ppo_btn = st.button("Train PPO", use_container_width=True)
         train_reinforce_btn = st.button("Train REINFORCE Agent", use_container_width=True)
         train_attention_btn = st.button("REINFORCE + Attention", use_container_width=True)
@@ -228,69 +230,17 @@ def main():
     # ========================================================================
     # MAIN PANEL - VISUALIZATION
     # ========================================================================
-    # Title $T
+    # Title
     st.markdown("""
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.0.3 - 02-Jan-2026 - IEEE Sensor data')
+    st.markdown(' - V.0.4 - 01-Jan-2026 - PPO Correction')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
     # ====================================================================
-    if auto_rl_btn:
-        if st.session_state.training_data_file is None:
-            st.error("⚠️ Please upload training data first!")
-        else:
-            st.session_state.current_view = 'training'
-            
-            # Sequence of agents to train
-            training_sequence = [
-                ('PPO', 'PPO'), 
-                ('REINFORCE', 'REINFORCE'), 
-                ('REINFORCE_ATTENTION', 'REINFORCE + Attention')
-            ]
-            
-            # Create environment (reused for all)
-            env = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1, R2, R3)
-            
-            # Initialize plot placeholder
-            st.session_state.plot_placeholder = st.empty()
-            
-            # Iterate through sequence
-            for agent_type, agent_name in training_sequence:
-                st.session_state.current_agent_name = agent_name
-                
-                # Reset training fig/axes for new plot
-                st.session_state.current_training_fig = None
-                st.session_state.current_training_axes = None
-                
-                with st.spinner(f'🔄 AutoRL: Training {agent_name}...'):
-                    # Train agent
-                    if agent_type == 'PPO':
-                        agent = train_ppo_agent(env, episodes, callback=training_callback)
-                    else:
-                        use_attention = (agent_type == 'REINFORCE_ATTENTION')
-                        agent = REINFORCEAgent(env, use_attention=use_attention)
-                        agent.learn(episodes, callback=training_callback)
-                    
-                    # Store trained agent
-                    st.session_state.trained_agents[agent_name] = agent
-                    
-                    # Store in training logs
-                    st.session_state.training_logs[agent_name] = {
-                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        'episodes': episodes,
-                        'agent': agent
-                    }
-                
-                st.success(f"✅ {agent_name} training completed!")
-                # Short pause to let user see the success message/plot before moving to next
-                time.sleep(1)
-            
-            st.toast("AutoRL sequence completed!")
-
-    elif train_ppo_btn or train_reinforce_btn or train_attention_btn:
+    if train_ppo_btn or train_reinforce_btn or train_attention_btn:
         if st.session_state.training_data_file is None:
             st.error("⚠️ Please upload training data first!")
         else:
@@ -456,8 +406,7 @@ def main():
             eval_df = pd.DataFrame(eval_results)
             # Reorder and rename columns for display
             cols_order = ['Agent', 'avg_reward', 'accuracy', 'precision', 'recall', 'f1', 
-                         'avg_replacements', 'avg_violations', 'avg_margin', 
-                         'action_0_count', 'action_1_count']
+                         'avg_replacements', 'avg_violations', 'avg_margin']
             
             # Ensure all requested columns exist in DF
             available_cols = [c for c in cols_order if c in eval_df.columns]
@@ -473,9 +422,7 @@ def main():
                 'f1': 'F1 Score',
                 'avg_replacements': 'Avg Replacements',
                 'avg_violations': 'Avg Violations',
-                'avg_margin': 'Avg Margin',
-                'action_0_count': 'Continue (Acts)',
-                'action_1_count': 'Replace (Acts)'
+                'avg_margin': 'Avg Margin'
             }
             
             eval_df.rename(columns=rename_map, inplace=True)
@@ -501,46 +448,25 @@ def main():
     # ====================================================================
     else:
         if st.session_state.current_view == 'welcome':
-            # If a file is uploaded, show the sensor data immediately
-            if st.session_state.training_data_file:
-                st.markdown("---")
-                # st.subheader(f"📊 Sensor Data Visualization: {os.path.basename(st.session_state.training_data_file)}")
-                
-                try:
-                    # Read the data
-                    df = pd.read_csv(st.session_state.training_data_file)
-                    
-                    # Add a smoothing slider
-                    smoothing = int(len(df.index)/20)
-                    
-                    # Generate and show plot
-                    with st.spinner("Generating sensor data plot..."):
-                        fig = plot_sensor_data(df, os.path.basename(st.session_state.training_data_file), smoothing=smoothing, data_source=data_source)
-                        st.pyplot(fig)
-                        
-                except Exception as e:
-                    st.error(f"Error visualizing data: {e}")
-            else:
-                st.markdown("""
-                    <div style='text-align: left; padding: 50px;'>                        
-                        <h3>Getting Started:</h3>
-                        <ol style='text-align: left; display: inline-block;'>
-                            <li>Upload sensor data CSV file in the left panel</li>
-                            <li>Choose a training algorithm (PPO, REINFORCE, or REINFORCE+Attention)</li>
-                            <li>Watch live training progress with 4 real-time plots</li>
-                            <li>Compare multiple agents and save the best performers</li>
-                            <li>Evaluate trained agents on new data</li>
-                        </ol>
-                        <br><br>
-                        <h3>Configuration:</h3>
-                        <ul style='text-align: left; display: inline-block;'>
-                            <li><strong>Wear Threshold:</strong> {}</li>
-                            <li><strong>Violation Threshold:</strong> {}</li>
-                            <li><strong>Reward Parameters:</strong> R1={}, R2={}, R3={}</li>
-                        </ul>
-                    </div>
-                """.format(WEAR_THRESHOLD, VIOLATION_THRESHOLD, R1, R2, R3), unsafe_allow_html=True)
-
+            st.markdown("""
+                <div style='text-align: left; padding: 50px;'>                        
+                    <h3>Getting Started:</h3>
+                    <ol style='text-align: left; display: inline-block;'>
+                        <li>Upload sensor data CSV file in the left panel</li>
+                        <li>Choose a training algorithm (PPO, REINFORCE, or REINFORCE+Attention)</li>
+                        <li>Watch live training progress with 4 real-time plots</li>
+                        <li>Compare multiple agents and save the best performers</li>
+                        <li>Evaluate trained agents on new data</li>
+                    </ol>
+                    <br><br>
+                    <h3>Configuration:</h3>
+                    <ul style='text-align: left; display: inline-block;'>
+                        <li><strong>Wear Threshold:</strong> {}</li>
+                        <li><strong>Violation Threshold:</strong> {}</li>
+                        <li><strong>Reward Parameters:</strong> R1={}, R2={}, R3={}</li>
+                    </ul>
+                </div>
+            """.format(WEAR_THRESHOLD, VIOLATION_THRESHOLD, R1, R2, R3), unsafe_allow_html=True)
         elif st.session_state.current_view == 'training':
             # Show last training plot
             if st.session_state.current_training_fig is not None:

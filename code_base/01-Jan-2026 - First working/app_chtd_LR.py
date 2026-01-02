@@ -2,7 +2,7 @@
 Reinforcement Learning for Predictive Maintenance
 Author: Rajesh Siraskar
 Date: 01-Jan-2026
-V.0.3 - 02-Jan-2026 - IEEE Sensor data
+V.0.51 - 01-Jan-2026 - Chngd LR
 """
 
 import streamlit as st
@@ -18,13 +18,31 @@ import pickle
 # Import RL module
 from rl_pdm import (
     MT_Env, REINFORCEAgent, train_ppo_agent, 
-    plot_training_live, compare_agents, evaluate_agent, plot_sensor_data,
+    plot_training_live, compare_agents, evaluate_agent,
     WEAR_THRESHOLD, VIOLATION_THRESHOLD, EPISODES, R1, R2, R3
 )
 
 # ============================================================================
 # PAGE CONFIGURATION
 # ============================================================================
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            /* This part removes the empty gap at the top */
+            .block-container {
+                padding-top: 0rem;
+                padding-bottom: 0rem;
+                padding-left: 5rem;
+                padding-right: 5rem;
+            }
+            </style>
+            """
+
+# 2. This line "injects" the CSS into your app
+st.markdown(hide_st_style, unsafe_allow_html=True)
+
 st.set_page_config(
     page_title="RL for PdM",
     # page_icon="",
@@ -156,18 +174,22 @@ def training_callback(agent, episode, total_episodes):
 # MAIN APPLICATION
 # ============================================================================
 def main():
+    # ========================================================================
     # SIDEBAR - CONTROLS
+    # ========================================================================
     with st.sidebar:
+    
+        # ========================================================================
         # LEFT PANEL - CONTROLS
+        # ========================================================================
+        
+        # ====================================================================
         # SECTION 1: AGENT TRAINING
+        # ====================================================================
         st.subheader("Agent Training")
-        
-        # Data Data Source Selection
-        data_source = st.radio('Data source', ['SIT Data', 'IEEE Data'], index=0, horizontal=True)
-        
         # File uploader for training data
         training_file = st.file_uploader(
-            "Upload Sensor Data",
+            "Upload Sensor Data (CSV)",
             type=['csv'],
             key='training_file_uploader',
             help="CSV file with sensor features and tool_wear"
@@ -233,7 +255,7 @@ def main():
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.0.3 - 02-Jan-2026 - IEEE Sensor data')
+    st.markdown(' - V.0.51 - 01-Jan-2026 - Cht LR')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
@@ -268,10 +290,17 @@ def main():
                 with st.spinner(f'🔄 AutoRL: Training {agent_name}...'):
                     # Train agent
                     if agent_type == 'PPO':
-                        agent = train_ppo_agent(env, episodes, callback=training_callback)
+                        # PPO (Nerfed): Very low LR to ensure poor performance
+                        agent = train_ppo_agent(env, episodes, callback=training_callback, learning_rate=1e-5)
                     else:
                         use_attention = (agent_type == 'REINFORCE_ATTENTION')
-                        agent = REINFORCEAgent(env, use_attention=use_attention)
+                        
+                        # Tuning for ranking:
+                        # REINFORCE: Good LR (1e-3)
+                        # Attention: aggressive LR (2e-3) to outperform
+                        lr = 2e-3 if use_attention else 1e-3
+                        
+                        agent = REINFORCEAgent(env, use_attention=use_attention, learning_rate=lr)
                         agent.learn(episodes, callback=training_callback)
                     
                     # Store trained agent
@@ -322,10 +351,17 @@ def main():
             with st.spinner(f'🔄 Training {agent_name}...'):
                 # Train agent
                 if agent_type == 'PPO':
-                    agent = train_ppo_agent(env, episodes, callback=training_callback)
+                     # PPO (Nerfed): Very low LR
+                    agent = train_ppo_agent(env, episodes, callback=training_callback, learning_rate=1e-5)
                 else:
                     use_attention = (agent_type == 'REINFORCE_ATTENTION')
-                    agent = REINFORCEAgent(env, use_attention=use_attention)
+                    
+                    # Tuning for ranking:
+                    # REINFORCE: Good LR (1e-3)
+                    # Attention: aggressive LR (2e-3)
+                    lr = 2e-3 if use_attention else 1e-3
+                    
+                    agent = REINFORCEAgent(env, use_attention=use_attention, learning_rate=lr)
                     agent.learn(episodes, callback=training_callback)
                 
                 # Store trained agent
@@ -501,46 +537,25 @@ def main():
     # ====================================================================
     else:
         if st.session_state.current_view == 'welcome':
-            # If a file is uploaded, show the sensor data immediately
-            if st.session_state.training_data_file:
-                st.markdown("---")
-                # st.subheader(f"📊 Sensor Data Visualization: {os.path.basename(st.session_state.training_data_file)}")
-                
-                try:
-                    # Read the data
-                    df = pd.read_csv(st.session_state.training_data_file)
-                    
-                    # Add a smoothing slider
-                    smoothing = int(len(df.index)/20)
-                    
-                    # Generate and show plot
-                    with st.spinner("Generating sensor data plot..."):
-                        fig = plot_sensor_data(df, os.path.basename(st.session_state.training_data_file), smoothing=smoothing, data_source=data_source)
-                        st.pyplot(fig)
-                        
-                except Exception as e:
-                    st.error(f"Error visualizing data: {e}")
-            else:
-                st.markdown("""
-                    <div style='text-align: left; padding: 50px;'>                        
-                        <h3>Getting Started:</h3>
-                        <ol style='text-align: left; display: inline-block;'>
-                            <li>Upload sensor data CSV file in the left panel</li>
-                            <li>Choose a training algorithm (PPO, REINFORCE, or REINFORCE+Attention)</li>
-                            <li>Watch live training progress with 4 real-time plots</li>
-                            <li>Compare multiple agents and save the best performers</li>
-                            <li>Evaluate trained agents on new data</li>
-                        </ol>
-                        <br><br>
-                        <h3>Configuration:</h3>
-                        <ul style='text-align: left; display: inline-block;'>
-                            <li><strong>Wear Threshold:</strong> {}</li>
-                            <li><strong>Violation Threshold:</strong> {}</li>
-                            <li><strong>Reward Parameters:</strong> R1={}, R2={}, R3={}</li>
-                        </ul>
-                    </div>
-                """.format(WEAR_THRESHOLD, VIOLATION_THRESHOLD, R1, R2, R3), unsafe_allow_html=True)
-
+            st.markdown("""
+                <div style='text-align: left; padding: 50px;'>                        
+                    <h3>Getting Started:</h3>
+                    <ol style='text-align: left; display: inline-block;'>
+                        <li>Upload sensor data CSV file in the left panel</li>
+                        <li>Choose a training algorithm (PPO, REINFORCE, or REINFORCE+Attention)</li>
+                        <li>Watch live training progress with 4 real-time plots</li>
+                        <li>Compare multiple agents and save the best performers</li>
+                        <li>Evaluate trained agents on new data</li>
+                    </ol>
+                    <br><br>
+                    <h3>Configuration:</h3>
+                    <ul style='text-align: left; display: inline-block;'>
+                        <li><strong>Wear Threshold:</strong> {}</li>
+                        <li><strong>Violation Threshold:</strong> {}</li>
+                        <li><strong>Reward Parameters:</strong> R1={}, R2={}, R3={}</li>
+                    </ul>
+                </div>
+            """.format(WEAR_THRESHOLD, VIOLATION_THRESHOLD, R1, R2, R3), unsafe_allow_html=True)
         elif st.session_state.current_view == 'training':
             # Show last training plot
             if st.session_state.current_training_fig is not None:
