@@ -2,10 +2,7 @@
 Reinforcement Learning for Predictive Maintenance
 Author: Rajesh Siraskar
 Date: 01-Jan-2026
-V.0.3 - 02-Jan-2026 - File loaded for IEEE Sensor data
-V.0.4 - 02-Jan-2026 - Updated environment for IEEE Sensor data
-V.0.41 - 02-Jan-2026 - Updated agent file name to include data info
-V.0.42 - 02-Jan-2026 - Show sensor data plot
+V.0.3 - 02-Jan-2026 - IEEE Sensor data
 """
 
 import streamlit as st
@@ -142,8 +139,7 @@ def training_callback(agent, episode, total_episodes):
         fig, axes = plot_training_live(
             agent, episode, total_episodes, agent_name,
             st.session_state.current_training_fig,
-            st.session_state.current_training_axes,
-            title_suffix=st.session_state.get('data_info_str', '')
+            st.session_state.current_training_axes
         )
         
         st.session_state.current_training_fig = fig
@@ -154,11 +150,6 @@ def training_callback(agent, episode, total_episodes):
         
         # Small delay to allow UI to update
         # time.sleep(0.1)
-
-
-def reset_on_change():
-    """Reset view to welcome when file changes to show the plot"""
-    st.session_state.current_view = 'welcome'
 
 
 # ============================================================================
@@ -173,15 +164,13 @@ def main():
         
         # Data Data Source Selection
         data_source = st.radio('Data source', ['SIT Data', 'IEEE Data'], index=0, horizontal=True)
-        st.session_state.data_source = data_source
         
         # File uploader for training data
         training_file = st.file_uploader(
             "Upload Sensor Data",
             type=['csv'],
             key='training_file_uploader',
-            help="CSV file with sensor features and tool_wear",
-            on_change=reset_on_change
+            help="CSV file with sensor features and tool_wear"
         )
         
         if training_file is not None:
@@ -244,7 +233,7 @@ def main():
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.0.42 - 02-Jan-2026 - Show sensor data plot')
+    st.markdown(' - V.0.3 - 02-Jan-2026 - IEEE Sensor data')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
@@ -261,10 +250,6 @@ def main():
                 ('REINFORCE', 'REINFORCE'), 
                 ('REINFORCE_ATTENTION', 'REINFORCE + Attention')
             ]
-            
-            # Construct data info string for plots
-            file_name = os.path.basename(st.session_state.training_data_file) if st.session_state.training_data_file else "Unknown"
-            st.session_state.data_info_str = f"{st.session_state.get('data_source', 'Data')} - {file_name}"
             
             # Create environment (reused for all)
             env = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1, R2, R3)
@@ -323,10 +308,6 @@ def main():
             st.session_state.current_agent_name = agent_name
             st.session_state.current_view = 'training'
             
-            # Construct data info string for plots
-            file_name = os.path.basename(st.session_state.training_data_file) if st.session_state.training_data_file else "Unknown"
-            st.session_state.data_info_str = f"{st.session_state.get('data_source', 'Data')} - {file_name}"
-            
             # Create environment
             env = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1, R2, R3)
             
@@ -370,13 +351,10 @@ def main():
             # st.subheader("Agent Performance Comparison")
             
             # Generate comparison
-            comparison_df, comparison_fig = compare_agents(
-                st.session_state.trained_agents,
-                title_suffix=st.session_state.get('data_info_str', '')
-            )
+            comparison_df, comparison_fig = compare_agents(st.session_state.trained_agents)
             
             # Display table
-            st.markdown(f"### Performance Metrics: {st.session_state.get('data_info_str', '')}")
+            st.markdown("### Performance Metrics")
             st.table(comparison_df)
             
             # Display plots
@@ -395,17 +373,9 @@ def main():
             os.makedirs(save_dir, exist_ok=True)
             
             # Save each agent
-            # Prepare data info string for filenames
-            data_info = st.session_state.get('data_info_str', 'unknown')
-            # Sanitize: remove spaces and file extension
-            safe_data_info = data_info.replace(' ', '_').replace('.csv', '')
-
-            # Save each agent
             for agent_name, agent in st.session_state.trained_agents.items():
                 safe_name = agent_name.replace(' ', '_').replace('+', 'plus')
-                # Add data info to filename
-                filename = f"{safe_name}_{safe_data_info}.pkl"
-                agent_path = os.path.join(save_dir, filename)
+                agent_path = os.path.join(save_dir, f"{safe_name}.pkl")
                 
                 if hasattr(agent, 'save'):
                     agent.save(agent_path)
@@ -415,14 +385,10 @@ def main():
             
             # Save comparison if multiple agents
             if len(st.session_state.trained_agents) >= 2:
-                # Add data info to comparison filename
-                comp_filename = f"comparison_{safe_data_info}.png"
-                comparison_path = os.path.join(save_dir, comp_filename)
-                
+                comparison_path = os.path.join(save_dir, "comparison.png")
                 comparison_df, comparison_fig = compare_agents(
                     st.session_state.trained_agents, 
-                    save_path=comparison_path,
-                    title_suffix=st.session_state.get('data_info_str', '')
+                    save_path=comparison_path
                 )
             
             st.success(f"✅ All agents and plots saved to: {save_dir}")
@@ -458,8 +424,7 @@ def main():
                     # Show plot
                     fig, axes = plot_training_live(
                         agent, log_data['episodes']-1, log_data['episodes'], 
-                        agent_name,
-                        title_suffix=st.session_state.get('data_info_str', '')
+                        agent_name
                     )
                     st.pyplot(fig)
     

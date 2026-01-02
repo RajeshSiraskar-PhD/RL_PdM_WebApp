@@ -938,25 +938,9 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
     
-    fig.suptitle(
-        f'Agent Performance Comparison',
-        x=0.035, y=0.98,
-        ha='left',
-        fontsize=14,
-        fontweight='bold',
-        color='#2C3E50'
-    )
-    fig.text(
-        0.4, 0.96,
-        f"{title_suffix}",
-        ha='left',
-        fontsize=12,
-        fontfamily='monospace',
-        fontweight='normal',
-        color='#2C3E50'
-    )   
+    fig.suptitle(f'Agent Performance Comparison\n{title_suffix}', fontsize=14) #fontweight='bold')
     plt.tight_layout()
-
+    
     # Save if requested
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -1153,13 +1137,13 @@ def plot_sensor_data(df, data_file_name, smoothing=None, data_source='SIT Data')
     """
     if data_source == 'IEEE Data':
         features_to_plot = {
-            (0, 0): 'force_x',
-            (0, 1): 'force_y',
-            (0, 2): 'force_z',
-            (1, 0): 'vibration_x',
-            (1, 1): 'vibration_y',
-            (1, 2): 'vibration_z',
-            (2, 0): 'acoustic_emission_rms',
+            (0, 0): 'acoustic_emission_rms',
+            (0, 1): 'force_x',
+            (0, 2): 'force_y',
+            (1, 0): 'force_z',
+            (1, 1): 'vibration_x',
+            (1, 2): 'vibration_y',
+            (2, 0): 'vibration_z',
             (2, 1): '-Not-available-',
             (2, 2): 'tool_wear'
         }

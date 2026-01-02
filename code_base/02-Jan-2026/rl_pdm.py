@@ -28,12 +28,11 @@ WEAR_THRESHOLD = 290
 VIOLATION_THRESHOLD = int(WEAR_THRESHOLD * 1.1)  # 10% over WEAR_THRESHOLD (330)
 EPISODES = 100
 SMOOTH_WINDOW = int(EPISODES/10)
-W, H = 18, 8 # Plot dimensions
 
 # Reward parameters
 R1 = -100  # Violation penalty
 R2 = 0.5   # Continue reward (per step)
-R3 = -2.0   # Replacement penalty
+R3 = 2.0   # Replacement penalty
 
 # RL Algorithm Hyperparameters (shared across all algorithms)
 LEARNING_RATE = 0.001  # Reduced from 0.1 - Policy gradient is very sensitive to LR
@@ -53,200 +52,6 @@ REPLACE_TOOL = 1
 # CUSTOM GYMNASIUM ENVIRONMENT
 # ============================================================================
 class MT_Env(gym.Env):
-    """
-    Milling Tool Predictive Maintenance Environment
-    
-    Observation: Sensor features ONLY (No Time, No tool_wear)
-    Action: CONTINUE (0) or REPLACE_TOOL (1)
-    
-    Reward structure:
-    - R2 per step for continuing without violation
-    - R1 penalty for threshold violations
-    - R3 penalty for tool replacement
-    
-    Key design: Episodes progress through the ENTIRE dataset regardless of replacements.
-    Replacing a tool resets the WEAR counter, but time marches forward.
-    This prevents infinite episodes from repeated replacements.
-    """
-    
-    print("RL Predictive Maintenance Module")
-    def __init__(self, data_file: str, wear_threshold: float = WEAR_THRESHOLD,
-                 r1: float = R1, r2: float = R2, r3: float = R3):
-        super().__init__()
-        
-        self.wear_threshold = wear_threshold
-        self.violation_threshold = VIOLATION_THRESHOLD
-        self.r1 = r1
-        self.r2 = r2
-        self.r3 = r3
-        
-        # Load sensor data
-        self.data = pd.read_csv(data_file)
-        
-        # Identify columns based on data type (SIT vs IEEE)
-        # SIT Dataset columns
-        self.sit_features = ['Vib_Spindle', 'Vib_Table', 'Sound_Spindle', 
-                            'Sound_table', 'X_Load_Cell', 'Y_Load_Cell', 
-                            'Z_Load_Cell', 'Current']
-                            
-        # IEEE Dataset features (based on user request)
-        self.ieee_features = ['force_x', 'force_y', 'force_z', 
-                             'vibration_x', 'vibration_y', 'vibration_z', 
-                             'acoustic_emission_rms']
-        
-        # Common required columns
-        self.common_required = ['tool_wear']
-        
-        # Determine which dataset we have
-        if all(col in self.data.columns for col in self.sit_features):
-            self.data_source = 'SIT'
-            self.feature_cols = self.sit_features
-            print(f"Detected SIT Dataset. Features: {len(self.feature_cols)}")
-        elif all(col in self.data.columns for col in self.ieee_features):
-            self.data_source = 'IEEE'
-            self.feature_cols = self.ieee_features
-            print(f"Detected IEEE Dataset. Features: {len(self.feature_cols)}")
-        else:
-            # Fallback or error
-            available_cols = list(self.data.columns)
-            raise ValueError(f"Unknown dataset format. Could not match SIT or IEEE features. Available columns: {available_cols}")
-            
-        # Check for tool_wear
-        if 'tool_wear' not in self.data.columns:
-             raise ValueError("Missing required column: 'tool_wear'")
-
-        # Normalize data for better learning
-        self.data_normalized = self.data.copy()
-        for col in self.feature_cols:
-            col_min = self.data[col].min()
-            col_max = self.data[col].max()
-            if col_max > col_min:
-                self.data_normalized[col] = (self.data[col] - col_min) / (col_max - col_min)
-            else:
-                self.data_normalized[col] = 0.0
-        
-        # Store original tool_wear for reward calculation
-        self.original_tool_wear = self.data['tool_wear'].values
-        
-        # Define action and observation spaces
-        self.action_space = spaces.Discrete(2)
-        # Observation space dimension reduced
-        self.observation_space = spaces.Box(
-            low=0.0, high=1.0, 
-            shape=(len(self.feature_cols),), 
-            dtype=np.float32
-        )
-        
-        # Episode tracking
-        self.current_step = 0
-        self.total_steps = len(self.data)
-        self.current_wear = 0.0  # Tool wear counter
-        self.wear_offset = 0.0   # Offset to decouple time from wear state
-        
-        # Metrics tracking
-        self.episode_reward = 0
-        self.total_replacements = 0
-        self.total_violations = 0
-        self.wear_margins = []  # Wear margin before each replacement
-        
-    def reset(self, seed=None, options=None):
-        """Reset environment to initial state"""
-        super().reset(seed=seed)
-        
-        self.current_step = 0
-        self.current_wear = 0.0
-        self.wear_offset = 0.0
-        self.episode_reward = 0
-        self.total_replacements = 0
-        self.total_violations = 0
-        self.wear_margins = []
-        
-        obs = self._get_observation()
-        return obs, {}
-    
-    def _get_observation(self) -> np.ndarray:
-        """Get current observation (normalized sensor values ONLY)"""
-        if self.current_step >= self.total_steps:
-            # Return last observation if we've exceeded data
-            self.current_step = self.total_steps - 1
-        
-        obs = self.data_normalized.iloc[self.current_step][self.feature_cols].values
-        
-        return obs.astype(np.float32)
-    
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        """Execute one step in the environment"""
-        
-        # 1. Calculate current wear state based on progress + offset
-        # Wear increases primarily due to time progression in the dataset
-        # We subtract the offset to account for any previous replacements
-        raw_dataset_wear = self.original_tool_wear[self.current_step]
-        self.current_wear = max(0.0, raw_dataset_wear - self.wear_offset)
-        
-        reward = 0
-        terminated = False
-        truncated = False
-        info = {
-            'replacement': False,
-            'violation': False,
-            'wear_margin': 0,
-            'current_wear': self.current_wear
-        }
-        
-        if action == REPLACE_TOOL:
-            # Tool replacement
-            self.total_replacements += 1
-            info['replacement'] = True
-            
-            # Calculate wear margin (how close to threshold when replaced)
-            wear_margin = self.wear_threshold - self.current_wear
-            self.wear_margins.append(wear_margin)
-            info['wear_margin'] = wear_margin
-            
-            # Penalty for replacement (to encourage using tool fully)
-            reward += self.r3
-            
-            # If replaced before threshold, negative margin (good)
-            # If replaced after threshold, positive margin (bad - violation)
-            if self.current_wear > self.violation_threshold:
-                # Violation: replaced too late
-                self.total_violations += 1
-                info['violation'] = True
-                reward += self.r1  # Heavy penalty
-            
-            # CRITICAL: Reset wear state by updating the offset
-            # The new offset is the current dataset wear, so calculating
-            # (dataset_wear - offset) will result in approx 0 for the next step
-            self.wear_offset = raw_dataset_wear
-            self.current_wear = 0.0
-            
-        else:  # CONTINUE
-            # Check if continuing causes a violation
-            if self.current_wear > self.violation_threshold:
-                # Violation: should have replaced but didn't
-                self.total_violations += 1
-                info['violation'] = True
-                reward += self.r1  # Heavy penalty
-                terminated = True  # Episode ends on violation
-            else:
-                # Good: continuing without violation
-                reward += self.r2
-        
-        # ALWAYS move to next step regardless of action
-        self.current_step += 1
-        
-        # Check if we've reached end of data
-        if self.current_step >= self.total_steps:
-            truncated = True
-        
-        # Get next observation
-        obs = self._get_observation()
-        self.episode_reward += reward
-        
-        return obs, reward, terminated, truncated, info
-
-
-class MT_Env_OLD(gym.Env):
     """
     Milling Tool Predictive Maintenance Environment
     
@@ -762,11 +567,14 @@ def smooth_curve(data: List[float], window: int = SMOOTH_WINDOW) -> np.ndarray:
 
 
 def plot_training_live(agent, episode: int, total_episodes: int, 
-                       agent_name: str, fig=None, axes=None, title_suffix: str = ""):
+                       agent_name: str, fig=None, axes=None):
     """
     Plot live training progress with 4 subplots
     Returns fig and axes for continuous updates
     """
+    # Plot dimensions
+    W, H = 18, 8
+    
     if fig is None or axes is None:
         fig, axes = plt.subplots(2, 2, figsize=(W, H))
         fig.patch.set_facecolor('#F0EBE7')
@@ -774,14 +582,6 @@ def plot_training_live(agent, episode: int, total_episodes: int,
     # Clear previous plots
     for ax in axes.flat:
         ax.clear()
-        
-    # Clear all figure texts (prevents ghosting)
-    fig.texts.clear()
-    
-    # IMPORTANT: Reset internal suptitle reference so Matplotlib creates a new one
-    # instead of trying to update the one we just removed from fig.texts
-    if hasattr(fig, '_suptitle'):
-        fig._suptitle = None
     
     # Get data
     rewards = agent.episode_rewards
@@ -804,71 +604,58 @@ def plot_training_live(agent, episode: int, total_episodes: int,
         margins_smooth = margins
     
     # Plot 1: Episode Rewards (Learning Curve)
-    axes[0, 0].plot(episodes_range, rewards, alpha=0.3, color='blue')
-    axes[0, 0].plot(episodes_range, rewards_smooth, color='darkblue', linewidth=1)
+    axes[0, 0].plot(episodes_range, rewards, alpha=0.3, color='blue', label='Raw')
+    axes[0, 0].plot(episodes_range, rewards_smooth, color='darkblue', linewidth=1, label='Smoothed')
     axes[0, 0].set_xlabel('Episode')
     axes[0, 0].set_ylabel('Total Reward')
     axes[0, 0].set_title('Learning Curve: Episode Rewards')
+    # axes[0, 0].legend()
     axes[0, 0].grid(True, alpha=0.3)
     
     # Plot 2: Total Replacements per Episode
-    axes[0, 1].plot(episodes_range, replacements, alpha=0.3, color='green')
-    axes[0, 1].plot(episodes_range, replacements_smooth, color='darkgreen', linewidth=1)
+    axes[0, 1].plot(episodes_range, replacements, alpha=0.3, color='green', label='Raw')
+    axes[0, 1].plot(episodes_range, replacements_smooth, color='darkgreen', linewidth=1, label='Smoothed')
     axes[0, 1].set_xlabel('Episode')
     axes[0, 1].set_ylabel('Count')
     axes[0, 1].set_title('Tool Replacements per Episode')
+    # axes[0, 1].legend()
     axes[0, 1].grid(True, alpha=0.3)
     
     # Plot 3: Threshold Violations
-    axes[1, 0].plot(episodes_range, violations, alpha=0.3, color='red')
-    axes[1, 0].plot(episodes_range, violations_smooth, color='darkred', linewidth=1)
+    axes[1, 0].plot(episodes_range, violations, alpha=0.3, color='red', label='Raw')
+    axes[1, 0].plot(episodes_range, violations_smooth, color='darkred', linewidth=1, label='Smoothed')
     axes[1, 0].set_xlabel('Episode')
     axes[1, 0].set_ylabel('Count')
     axes[1, 0].set_title('Wear Threshold Violations')
+    # axes[1, 0].legend()
     axes[1, 0].grid(True, alpha=0.3)
     
     # Plot 4: Wear Margins Before Replacement
-    axes[1, 1].plot(episodes_range, margins, alpha=0.3, color='orange')
-    axes[1, 1].plot(episodes_range, margins_smooth, color='darkorange', linewidth=1)
+    axes[1, 1].plot(episodes_range, margins, alpha=0.3, color='orange', label='Raw')
+    axes[1, 1].plot(episodes_range, margins_smooth, color='darkorange', linewidth=1, label='Smoothed')
     axes[1, 1].axhline(y=0, color='black', linestyle='--', alpha=0.5, label='Optimal')
     axes[1, 1].set_xlabel('Episode')
-    axes[1, 1].set_ylabel('Margin')
-    axes[1, 1].set_title('Wear Margin Before Replacements')
+    axes[1, 1].set_ylabel('Margin (Threshold - Wear)')
+    axes[1, 1].set_title('Wear Margin Before Replacements (Lower is Better)')
+    # axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
     
-    # Main title (fontweight='bold')
-    # 1. Left align the full title & 2. Make the main model bold and the rest small/plain
-    progress_pct = ((episode+1) / max(total_episodes, 1)) * 100
-    fig.suptitle(
-        f'{agent_name} Agent | {title_suffix}',
-        x=0.035, y=0.98,
-        ha='left',
-        fontsize=14,
-        fontweight='bold',
-        color='#2C3E50'
-    )
-    fig.text(
-        0.98, 0.96,
-        f"Training progress - episode {episode+1}/{total_episodes} ({progress_pct:.1f}%)",
-        ha='right',
-        fontsize=12,
-        fontfamily='monospace',
-        fontweight='normal',
-        color='#2C3E50'
-    )    
+    # Main title
+    fig.suptitle(f'{agent_name} - Training Episodes {episode+1}/{total_episodes}', 
+                 fontsize=14, fontweight='bold')
+    
     plt.tight_layout()
     
     return fig, axes
 
 
-def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None, title_suffix: str = ""):
+def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None):
     """
     Compare multiple agents: generate table and superimposed plots
     
     Args:
         agents_dict: Dictionary with agent names as keys and agent objects as values
         save_path: Optional path to save comparison results
-        title_suffix: Optional string to append to the title (e.g. data source info)
     
     Returns:
         DataFrame with comparison metrics, Figure with comparison plots
@@ -890,7 +677,9 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     # Create comparison DataFrame
     comparison_df = pd.DataFrame(comparison_data)
     
-    # Create comparison plots    
+    # Create comparison plots
+    W, H = 18, 8
+    
     fig, axes = plt.subplots(2, 2, figsize=(W, H))
     fig.patch.set_facecolor('#F0EBE7')
     
@@ -938,25 +727,9 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     axes[1, 1].legend()
     axes[1, 1].grid(True, alpha=0.3)
     
-    fig.suptitle(
-        f'Agent Performance Comparison',
-        x=0.035, y=0.98,
-        ha='left',
-        fontsize=14,
-        fontweight='bold',
-        color='#2C3E50'
-    )
-    fig.text(
-        0.4, 0.96,
-        f"{title_suffix}",
-        ha='left',
-        fontsize=12,
-        fontfamily='monospace',
-        fontweight='normal',
-        color='#2C3E50'
-    )   
+    fig.suptitle('Agent Performance Comparison', fontsize=14, fontweight='bold')
     plt.tight_layout()
-
+    
     # Save if requested
     if save_path:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -1153,13 +926,13 @@ def plot_sensor_data(df, data_file_name, smoothing=None, data_source='SIT Data')
     """
     if data_source == 'IEEE Data':
         features_to_plot = {
-            (0, 0): 'force_x',
-            (0, 1): 'force_y',
-            (0, 2): 'force_z',
-            (1, 0): 'vibration_x',
-            (1, 1): 'vibration_y',
-            (1, 2): 'vibration_z',
-            (2, 0): 'acoustic_emission_rms',
+            (0, 0): 'acoustic_emission_rms',
+            (0, 1): 'force_x',
+            (0, 2): 'force_y',
+            (1, 0): 'force_z',
+            (1, 1): 'vibration_x',
+            (1, 2): 'vibration_y',
+            (2, 0): 'vibration_z',
             (2, 1): '-Not-available-',
             (2, 2): 'tool_wear'
         }
