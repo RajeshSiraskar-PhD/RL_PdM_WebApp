@@ -1,7 +1,7 @@
 """
 RL-based Predictive Maintenance Module
 Custom Gymnasium environment and RL algorithms for milling machine tool wear prediction
-V.2.1 - 04-Jan-2026 - Margin-based reward structure for optimal replacement timing
+V.2.0 - Attempt-1 to improve Attention 
 """
 
 import numpy as np
@@ -21,7 +21,6 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 import pickle
 import warnings
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 # ============================================================================
 # GLOBAL CONFIGURATION
@@ -206,29 +205,16 @@ class MT_Env(gym.Env):
             self.wear_margins.append(wear_margin)
             info['wear_margin'] = wear_margin
             
-            # NEW MARGIN-BASED REWARD STRUCTURE
-            # Goal: Create gradient signal to encourage replacements close to threshold
-            # The closer to threshold (smaller margin), the better the reward
+            # Penalty for replacement (to encourage using tool fully)
+            reward += self.r3
             
+            # If replaced before threshold, negative margin (good)
+            # If replaced after threshold, positive margin (bad - violation)
             if self.current_wear > self.violation_threshold:
-                # Violation: replaced too late (wear > 330)
+                # Violation: replaced too late
                 self.total_violations += 1
                 info['violation'] = True
-                reward += self.r1  # Heavy penalty (-100)
-            else:
-                # Replaced before violation threshold
-                # Calculate penalty based on how early the replacement was
-                # margin_ratio: 0.0 (at threshold) to 1.0 (at wear=0)
-                margin_ratio = wear_margin / self.wear_threshold
-                
-                # Quadratic penalty: heavily penalizes early replacements
-                # Examples (with R3=-2.0):
-                # - margin=290 (wear=0):   ratio=1.0   → penalty ≈ -20.0
-                # - margin=145 (wear=145): ratio=0.5   → penalty ≈ -5.0
-                # - margin=50 (wear=240):  ratio=0.17  → penalty ≈ -0.58
-                # - margin=10 (wear=280):  ratio=0.034 → penalty ≈ -0.023
-                # - margin=5 (wear=285):   ratio=0.017 → penalty ≈ -0.006
-                reward += self.r3 * (margin_ratio ** 2) * 10.0
+                reward += self.r1  # Heavy penalty
             
             # CRITICAL: Reset wear state by updating the offset
             # The new offset is the current dataset wear, so calculating
@@ -586,10 +572,6 @@ class REINFORCEAgent:
         self.episode_violations = []
         self.episode_margins = []
         
-        # Steady-state metrics
-        self.T_ss = None  # Time to reach steady-state
-        self.Sigma_ss = None  # Steady-state variation (std dev)
-        
     def predict(self, observation, deterministic=False):
         """Predict action (compatible with SB3 API)"""
         with torch.no_grad():
@@ -792,9 +774,7 @@ class REINFORCEAgent:
             'episode_rewards': self.episode_rewards,
             'episode_replacements': self.episode_replacements,
             'episode_violations': self.episode_violations,
-            'episode_margins': self.episode_margins,
-            'T_ss': self.T_ss,
-            'Sigma_ss': self.Sigma_ss
+            'episode_margins': self.episode_margins
         }
         torch.save(save_dict, path)
     
@@ -834,10 +814,6 @@ class REINFORCEAgent:
         self.episode_violations = checkpoint['episode_violations']
         self.episode_margins = checkpoint.get('episode_margins', []) # Handle if missing in very old models
         
-        # Restore steady-state metrics
-        self.T_ss = checkpoint.get('T_ss', None)
-        self.Sigma_ss = checkpoint.get('Sigma_ss', None)
-        
         return self
 
 # ============================================================================
@@ -856,49 +832,6 @@ def smooth_curve(data: List[float], window: int = SMOOTH_WINDOW) -> np.ndarray:
         smoothed[i] = alpha * data[i] + (1 - alpha) * smoothed[i-1]
     
     return smoothed
-
-
-def detect_steady_state(data: List[float], window: int = 50, threshold: float = 0.15) -> Tuple[int, float]:
-    """
-    Detect time to reach steady-state (T_ss) and steady-state variation (Sigma_ss)
-    
-    Args:
-        data: List of values (e.g., wear margins)
-        window: Window size to calculate local variance
-        threshold: Variance threshold below which we consider steady-state (as % of mean)
-    
-    Returns:
-        Tuple of (T_ss, Sigma_ss) where:
-            T_ss: Episode number when steady-state is reached
-            Sigma_ss: Standard deviation in steady-state region
-    """
-    if len(data) < window:
-        return len(data), np.std(data) if data else 0.0
-    
-    # Use smoothed data for stability
-    smoothed = smooth_curve(data, window=min(20, window // 2))
-    
-    # Calculate rolling variance
-    T_ss = len(data)  # Default to end if no steady-state found
-    mean_val = np.mean(smoothed)
-    threshold_val = threshold * abs(mean_val) if mean_val != 0 else threshold
-    
-    for i in range(window, len(smoothed)):
-        local_var = np.var(smoothed[i-window:i])
-        
-        # Check if variance is below threshold
-        if local_var < threshold_val ** 2:
-            # Found steady-state start
-            T_ss = i
-            # Calculate Sigma_ss from the steady-state region onwards
-            Sigma_ss = np.std(data[T_ss:]) if T_ss < len(data) else 0.0
-            return T_ss, Sigma_ss
-    
-    # If no steady-state found, calculate from last quarter
-    last_quarter_start = max(window, len(data) // 4 * 3)
-    Sigma_ss = np.std(data[last_quarter_start:]) if data else 0.0
-    
-    return T_ss, Sigma_ss
 
 
 def plot_training_live(agent, episode: int, total_episodes: int, 
@@ -967,39 +900,14 @@ def plot_training_live(agent, episode: int, total_episodes: int,
     axes[1, 0].set_title('Wear Threshold Violations')
     axes[1, 0].grid(True, alpha=0.3)
     
-    # Plot 4: Wear Margins Before Replacement - WITH STEADY-STATE METRICS
+    # Plot 4: Wear Margins Before Replacement
     axes[1, 1].plot(episodes_range, margins, alpha=0.3, color='orange')
     axes[1, 1].plot(episodes_range, margins_smooth, color='darkorange', linewidth=1)
     axes[1, 1].axhline(y=0, color='black', linestyle='--', alpha=0.5, label='Optimal')
-    
-    # Detect and display steady-state metrics
-    T_ss, Sigma_ss = detect_steady_state(margins)
-    
-    # Add vertical line at T_ss (transition to steady-state)
-    if T_ss < len(margins):
-        axes[1, 1].axvline(x=T_ss, color='purple', linestyle=':', linewidth=2, alpha=0.7, label=f'T_ss={T_ss}')
-    
-    # Add steady-state band (±Sigma_ss around mean in steady-state region)
-    if T_ss < len(margins):
-        ss_mean = np.mean(margins[T_ss:])
-        axes[1, 1].fill_between(
-            range(T_ss, len(margins) + 1),
-            ss_mean - Sigma_ss,
-            ss_mean + Sigma_ss,
-            alpha=0.15,
-            color='purple',
-            label=f'σ_ss={Sigma_ss:.2f}'
-        )
-    
     axes[1, 1].set_xlabel('Episode')
     axes[1, 1].set_ylabel('Margin')
     axes[1, 1].set_title('Wear Margin Before Replacements')
-    axes[1, 1].legend(loc='best', fontsize=9)
     axes[1, 1].grid(True, alpha=0.3)
-    
-    # Store steady-state metrics in agent
-    agent.T_ss = T_ss
-    agent.Sigma_ss = Sigma_ss
     
     # Main title (fontweight='bold')
     # 1. Left align the full title & 2. Make the main model bold and the rest small/plain
@@ -1048,9 +956,7 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
             'Avg Replacements': np.mean(agent.episode_replacements[-20:]),
             'Avg Violations': np.mean(agent.episode_violations[-20:]),
             'Avg Margin': np.mean(agent.episode_margins[-20:]),
-            'Final Reward': agent.episode_rewards[-1] if len(agent.episode_rewards) > 0 else 0,
-            'T_ss': agent.T_ss if hasattr(agent, 'T_ss') and agent.T_ss is not None else 'N/A',
-            'Sigma_ss': agent.Sigma_ss if hasattr(agent, 'Sigma_ss') and agent.Sigma_ss is not None else 'N/A'
+            'Final Reward': agent.episode_rewards[-1] if len(agent.episode_rewards) > 0 else 0
         }
         comparison_data.append(metrics)
     
@@ -1141,97 +1047,8 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     return comparison_df, fig
 
 
-
-# ============================================================================
-# PPO CUSTOM FEATURE EXTRACTORS (Attention)
-# ============================================================================
-class AttentionExtractor(BaseFeaturesExtractor):
-    """
-    Feature extractor with simple attention mechanism for SB3 PPO
-    """
-    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 128):
-        super().__init__(observation_space, features_dim)
-        
-        obs_dim = observation_space.shape[0]
-        
-        # Attention layer
-        self.attention = nn.Sequential(
-            nn.Linear(obs_dim, obs_dim),
-            nn.Tanh(),
-            nn.Linear(obs_dim, obs_dim),
-            nn.Sigmoid()
-        )
-        
-        # Feature extractor matching PolicyNetwork hidden size
-        self.extractor = nn.Sequential(
-            nn.Linear(obs_dim, features_dim),
-            nn.ReLU(),
-            nn.Linear(features_dim, features_dim),
-            nn.ReLU()
-        )
-
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        # Apply attention
-        attention_weights = self.attention(observations)
-        weighted_features = observations * attention_weights
-        
-        # Extract features
-        return self.extractor(weighted_features)
-
-
-class NadarayaWatsonExtractor(BaseFeaturesExtractor):
-    """
-    Feature extractor with Nadaraya-Watson style attention for SB3 PPO
-    """
-    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 128, n_prototypes: int = 16):
-        super().__init__(observation_space, features_dim)
-        
-        obs_dim = observation_space.shape[0]
-        
-        # Learnable keys (Prototypes)
-        self.keys = nn.Parameter(torch.randn(n_prototypes, obs_dim))
-        
-        # Learnable values
-        self.values = nn.Parameter(torch.randn(n_prototypes, features_dim))
-        
-        # Temperature
-        self.temperature = nn.Parameter(torch.ones(1))
-        
-        # Feature processor after attention
-        # Note: The context returned is already (batch, features_dim), so we might just pass it through
-        # or add another non-linear layer. matching NWPolicyNetwork structure which goes straight to policy head.
-        # But SB3 expects a feature vector that goes into the policy head.
-        # So we can just return the context (values) or process it.
-        # Let's match the NWPolicyNetwork: context -> Policy Head.
-        # So this extractor should produce the 'context'.
-        
-        # Optional: Additional processing to match "features_dim" solidly? 
-        # The values are already features_dim.
-        
-    def forward(self, observations: torch.Tensor) -> torch.Tensor:
-        # observations: (batch, obs_dim)
-        
-        # Normalize inputs
-        x_norm = torch.nn.functional.normalize(observations, p=2, dim=-1)
-        k_norm = torch.nn.functional.normalize(self.keys, p=2, dim=-1)
-        
-        # Cosine similarity scores
-        scores = torch.mm(x_norm, k_norm.t()) / torch.clamp(self.temperature, min=0.01)
-        
-        # Attention weights
-        attn_weights = torch.softmax(scores, dim=-1)
-        
-        # Weighted values (Context)
-        context = torch.mm(attn_weights, self.values)
-        
-        return context
-
-
-def train_ppo_agent(env: MT_Env, episodes: int, callback=None, attention_type: str = 'none') -> PPO:
-    """
-    Train PPO agent using Stable Baselines3
-    attention_type: 'none', 'simple', 'nadaraya'
-    """
+def train_ppo_agent(env: MT_Env, episodes: int, callback=None) -> PPO:
+    """Train PPO agent using Stable Baselines3"""
     from stable_baselines3.common.callbacks import BaseCallback
     
     class TrainingCallback(BaseCallback):
@@ -1288,43 +1105,11 @@ def train_ppo_agent(env: MT_Env, episodes: int, callback=None, attention_type: s
             return True
     
     # Create PPO agent
-    policy_kwargs = None
-    
-    if attention_type == 'simple':
-        policy_kwargs = dict(
-            features_extractor_class=AttentionExtractor,
-            features_extractor_kwargs=dict(features_dim=128),
-            net_arch=[] # Extractor does all the work, direct to action head? 
-            # CAREFUL: standard MlpPolicy adds dense layers after extractor.
-            # Our custom extractor outputs 128 dim features.
-            # If we want to mimic the REINFORCE structure:
-            # REINFORCE: Input -> [Attn] -> Weighted -> Linear(128) -> ReLU -> Linear(128) -> ReLU -> Head
-            
-            # Implementation above:
-            # AttentionExtractor: Input -> [Attn] -> Weighted -> Linear(128) -> ReLU -> Linear(128) -> ReLU
-            # So the output is 128 dim.
-            # SB3 MlpPolicy default: 2 layers of 64.
-            # We should probably set net_arch to [] so 'features' go directly to action/value heads
-            # OR let SB3 add its layers.
-            # To strictly match our REINFORCE, the extractor IS the body.
-        )
-        # If we use net_arch=[], the features (128) go to policy head (Linear(128, action_dim)).
-        # This matches REINFORCE structure: Body -> Head.
-        policy_kwargs['net_arch'] = []
-        
-    elif attention_type == 'nadaraya':
-        policy_kwargs = dict(
-            features_extractor_class=NadarayaWatsonExtractor,
-            features_extractor_kwargs=dict(features_dim=128, n_prototypes=16),
-            net_arch=[] # Context (128) -> Head
-        )
-        
     model = PPO("MlpPolicy", env, verbose=0, 
                 learning_rate=LEARNING_RATE,
                 n_steps=512,
                 batch_size=64,
-                gamma=GAMMA,
-                policy_kwargs=policy_kwargs)
+                gamma=GAMMA)
     
     # Train with callback
     training_callback = TrainingCallback(callback, episodes)

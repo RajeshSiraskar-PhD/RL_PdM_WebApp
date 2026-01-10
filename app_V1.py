@@ -42,14 +42,14 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-        /* Main App Background (Right Column) - Deep Night Blue 0f172a*/
+        /* Main App Background (Right Column) - Very Light Pale Yellow */
         .stApp {
-            background-color: #717171;
+            background-color: #f2f1e6;
         }
         
-        /* Sidebar Background (Left Column) - Dark Blue #1a1f3a*/
+        /* Sidebar Background (Left Column) - Muted Green/Earth tone */
         [data-testid="stSidebar"] {
-            background-color: #9A9A9A;
+            background-color: #ddded3;
             border-right: 1px solid #d1e7fbad;
         }
 
@@ -79,15 +79,13 @@ st.markdown("""
         /* Custom button styling */
         .stButton > button {
             width: 100%;
-            background-color: #2d3e5f;
-            border: 1px solid #4a5f7f;
-            color: #ffffff !important;
+            background-color: #F0F2F6;
+            border: 1px solid #B0C4DE;
         }
         
         .stButton > button:hover {
-            background-color: #3a4f73;
-            border: 1px solid #5a7f9f;
-            color: #ffffff !important;
+            background-color: #e1e6eb;
+            border: 1px solid #A9C5E0;
         }
 
         /* Table header alignment */
@@ -270,7 +268,7 @@ def main():
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.2- 07-Jan-2026 - SB3')
+    st.markdown(' - V.2.08 - 04-Jan-2026 - Revised reward for wear margins')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
@@ -631,9 +629,11 @@ def main():
                     <div style='text-align: left; padding: 50px;'>                        
                         <h3>Getting Started:</h3>
                         <ol style='text-align: left; display: inline-block;'>
-                            <li>Upload sensor data CSV file and select training mode</li>
-                            <li>AutoRL: Auto trains and shows best algo.</li>
-                            <li>Wear-margin: Steady state and variation</li>                            
+                            <li>Upload sensor data CSV file in the left panel</li>
+                            <li>Choose a training algorithm (PPO, REINFORCE, or REINFORCE+Attention)</li>
+                            <li>Watch live training progress with 4 real-time plots</li>
+                            <li>Compare multiple agents and save the best performers</li>
+                            <li>Evaluate trained agents on new data</li>
                         </ol>
                         <br><br>
                         <h3>Configuration:</h3>

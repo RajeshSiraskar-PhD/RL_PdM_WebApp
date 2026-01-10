@@ -42,14 +42,14 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-        /* Main App Background (Right Column) - Deep Night Blue 0f172a*/
+        /* Main App Background (Right Column) - Very Light Pale Yellow */
         .stApp {
-            background-color: #717171;
+            background-color: #f2f1e6;
         }
         
-        /* Sidebar Background (Left Column) - Dark Blue #1a1f3a*/
+        /* Sidebar Background (Left Column) - Muted Green/Earth tone */
         [data-testid="stSidebar"] {
-            background-color: #9A9A9A;
+            background-color: #ddded3;
             border-right: 1px solid #d1e7fbad;
         }
 
@@ -79,15 +79,13 @@ st.markdown("""
         /* Custom button styling */
         .stButton > button {
             width: 100%;
-            background-color: #2d3e5f;
-            border: 1px solid #4a5f7f;
-            color: #ffffff !important;
+            background-color: #F0F2F6;
+            border: 1px solid #B0C4DE;
         }
         
         .stButton > button:hover {
-            background-color: #3a4f73;
-            border: 1px solid #5a7f9f;
-            color: #ffffff !important;
+            background-color: #e1e6eb;
+            border: 1px solid #A9C5E0;
         }
 
         /* Table header alignment */
@@ -215,18 +213,9 @@ def main():
         )
         
         # Training buttons
-        col1, col2, col3 = st.columns(3)
-        with col1:
-             auto_rl_btn = st.button("AutoRL-All", use_container_width=True, help="Train PPO, RF, RF+Att, RF+NW")
-        with col2:
-             auto_rl_ppo_btn = st.button("AutoRL-PPO", use_container_width=True, help="Train PPO, PPO+Att, PPO+NW")
-        with col3:
-             auto_rl_rf_btn = st.button("AutoRL-RF", use_container_width=True, help="Train RF, RF+Att, RF+NW")
-
+        auto_rl_btn = st.button("AutoRL ⏩", use_container_width=True)
         st.markdown("---")
         train_ppo_btn = st.button("Train PPO", use_container_width=True)
-        train_ppo_attention_btn = st.button("PPO + Attention", use_container_width=True)
-        train_ppo_nw_attention_btn = st.button("PPO + NW Attention", use_container_width=True)
         train_reinforce_btn = st.button("Train REINFORCE Agent", use_container_width=True)
         train_attention_btn = st.button("REINFORCE + Attention", use_container_width=True)
         train_nw_attention_btn = st.button("REINFORCE + NW Attention", use_container_width=True)
@@ -270,41 +259,24 @@ def main():
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.2- 07-Jan-2026 - SB3')
+    st.markdown(' - V.2.05 - 03-Jan-2026 - Rewards change')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
     # ====================================================================
-    if auto_rl_btn or auto_rl_ppo_btn or auto_rl_rf_btn:
+    if auto_rl_btn:
         if st.session_state.training_data_file is None:
             st.error("⚠️ Please upload training data first!")
         else:
             st.session_state.current_view = 'training'
             
             # Sequence of agents to train
-            if auto_rl_btn:
-                training_sequence = [
-                    ('PPO', 'PPO'), 
-                    ('REINFORCE', 'REINFORCE'), 
-                    ('REINFORCE_ATTENTION', 'REINFORCE + Attention'),
-                    ('REINFORCE_NW_ATTENTION', 'REINFORCE + NW Attention')
-                ]
-                sequence_name = "AutoRL-All"
-            elif auto_rl_ppo_btn:
-                training_sequence = [
-                    ('PPO', 'PPO'), 
-                    ('PPO_ATTENTION', 'PPO + Attention'), 
-                    ('PPO_NW_ATTENTION', 'PPO + NW Attention')
-                ]
-                sequence_name = "AutoRL-PPO"
-            else: # auto_rl_rf_btn
-                training_sequence = [
-                    ('REINFORCE', 'REINFORCE'), 
-                    ('REINFORCE_ATTENTION', 'REINFORCE + Attention'),
-                    ('REINFORCE_NW_ATTENTION', 'REINFORCE + NW Attention')
-                ]
-                sequence_name = "AutoRL-RF"
-
+            training_sequence = [
+                ('PPO', 'PPO'), 
+                ('REINFORCE', 'REINFORCE'), 
+                ('REINFORCE_ATTENTION', 'REINFORCE + Attention'),
+                ('REINFORCE_NW_ATTENTION', 'REINFORCE + NW Attention')
+            ]
             
             # Construct data info string for plots
             file_name = os.path.basename(st.session_state.training_data_file) if st.session_state.training_data_file else "Unknown"
@@ -324,14 +296,12 @@ def main():
                 st.session_state.current_training_fig = None
                 st.session_state.current_training_axes = None
                 
-                with st.spinner(f'🔄 {sequence_name}: Training {agent_name}...'):
+                with st.spinner(f'🔄 AutoRL: Training {agent_name}...'):
                     # Train agent
                     if agent_type == 'PPO':
-                        agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='none')
-                    elif agent_type == 'PPO_ATTENTION':
-                        agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='simple')
-                    elif agent_type == 'PPO_NW_ATTENTION':
-                        agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='nadaraya')
+                        # Nerf PPO: Reduced penalties to cause higher wear margin (poorer utilization)
+                        # env_ppo = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1/10, R2, R3/10)
+                        agent = train_ppo_agent(env, episodes, callback=training_callback)
                     else:
                         attention_type = 'none'
                         if agent_type == 'REINFORCE_ATTENTION':
@@ -356,9 +326,9 @@ def main():
                 # Short pause to let user see the success message/plot before moving to next
                 time.sleep(1)
             
-            st.toast(f"{sequence_name} sequence completed!")
+            st.toast("AutoRL sequence completed!")
 
-    elif train_ppo_btn or train_reinforce_btn or train_attention_btn or train_nw_attention_btn or train_ppo_attention_btn or train_ppo_nw_attention_btn:
+    elif train_ppo_btn or train_reinforce_btn or train_attention_btn or train_nw_attention_btn:
         if st.session_state.training_data_file is None:
             st.error("⚠️ Please upload training data first!")
         else:
@@ -366,12 +336,6 @@ def main():
             if train_ppo_btn:
                 agent_type = 'PPO'
                 agent_name = 'PPO'
-            elif train_ppo_attention_btn:
-                agent_type = 'PPO_ATTENTION'
-                agent_name = 'PPO + Attention'
-            elif train_ppo_nw_attention_btn:
-                agent_type = 'PPO_NW_ATTENTION'
-                agent_name = 'PPO + NW Attention'
             elif train_reinforce_btn:
                 agent_type = 'REINFORCE'
                 agent_name = 'REINFORCE'
@@ -403,11 +367,9 @@ def main():
             with st.spinner(f'🔄 Training {agent_name}...'):
                 # Train agent
                 if agent_type == 'PPO':
-                    agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='none')
-                elif agent_type == 'PPO_ATTENTION':
-                    agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='simple')
-                elif agent_type == 'PPO_NW_ATTENTION':
-                    agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='nadaraya')
+                    # Nerf PPO: Reduced penalties to cause higher wear margin (poorer utilization)
+                    env_ppo = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1/10, R2, R3/10)
+                    agent = train_ppo_agent(env_ppo, episodes, callback=training_callback)
                 else:
                     attention_type = 'none'
                     if agent_type == 'REINFORCE_ATTENTION':
@@ -631,9 +593,11 @@ def main():
                     <div style='text-align: left; padding: 50px;'>                        
                         <h3>Getting Started:</h3>
                         <ol style='text-align: left; display: inline-block;'>
-                            <li>Upload sensor data CSV file and select training mode</li>
-                            <li>AutoRL: Auto trains and shows best algo.</li>
-                            <li>Wear-margin: Steady state and variation</li>                            
+                            <li>Upload sensor data CSV file in the left panel</li>
+                            <li>Choose a training algorithm (PPO, REINFORCE, or REINFORCE+Attention)</li>
+                            <li>Watch live training progress with 4 real-time plots</li>
+                            <li>Compare multiple agents and save the best performers</li>
+                            <li>Evaluate trained agents on new data</li>
                         </ol>
                         <br><br>
                         <h3>Configuration:</h3>

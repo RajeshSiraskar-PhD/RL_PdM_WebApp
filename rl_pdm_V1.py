@@ -586,10 +586,6 @@ class REINFORCEAgent:
         self.episode_violations = []
         self.episode_margins = []
         
-        # Steady-state metrics
-        self.T_ss = None  # Time to reach steady-state
-        self.Sigma_ss = None  # Steady-state variation (std dev)
-        
     def predict(self, observation, deterministic=False):
         """Predict action (compatible with SB3 API)"""
         with torch.no_grad():
@@ -792,9 +788,7 @@ class REINFORCEAgent:
             'episode_rewards': self.episode_rewards,
             'episode_replacements': self.episode_replacements,
             'episode_violations': self.episode_violations,
-            'episode_margins': self.episode_margins,
-            'T_ss': self.T_ss,
-            'Sigma_ss': self.Sigma_ss
+            'episode_margins': self.episode_margins
         }
         torch.save(save_dict, path)
     
@@ -834,10 +828,6 @@ class REINFORCEAgent:
         self.episode_violations = checkpoint['episode_violations']
         self.episode_margins = checkpoint.get('episode_margins', []) # Handle if missing in very old models
         
-        # Restore steady-state metrics
-        self.T_ss = checkpoint.get('T_ss', None)
-        self.Sigma_ss = checkpoint.get('Sigma_ss', None)
-        
         return self
 
 # ============================================================================
@@ -856,49 +846,6 @@ def smooth_curve(data: List[float], window: int = SMOOTH_WINDOW) -> np.ndarray:
         smoothed[i] = alpha * data[i] + (1 - alpha) * smoothed[i-1]
     
     return smoothed
-
-
-def detect_steady_state(data: List[float], window: int = 50, threshold: float = 0.15) -> Tuple[int, float]:
-    """
-    Detect time to reach steady-state (T_ss) and steady-state variation (Sigma_ss)
-    
-    Args:
-        data: List of values (e.g., wear margins)
-        window: Window size to calculate local variance
-        threshold: Variance threshold below which we consider steady-state (as % of mean)
-    
-    Returns:
-        Tuple of (T_ss, Sigma_ss) where:
-            T_ss: Episode number when steady-state is reached
-            Sigma_ss: Standard deviation in steady-state region
-    """
-    if len(data) < window:
-        return len(data), np.std(data) if data else 0.0
-    
-    # Use smoothed data for stability
-    smoothed = smooth_curve(data, window=min(20, window // 2))
-    
-    # Calculate rolling variance
-    T_ss = len(data)  # Default to end if no steady-state found
-    mean_val = np.mean(smoothed)
-    threshold_val = threshold * abs(mean_val) if mean_val != 0 else threshold
-    
-    for i in range(window, len(smoothed)):
-        local_var = np.var(smoothed[i-window:i])
-        
-        # Check if variance is below threshold
-        if local_var < threshold_val ** 2:
-            # Found steady-state start
-            T_ss = i
-            # Calculate Sigma_ss from the steady-state region onwards
-            Sigma_ss = np.std(data[T_ss:]) if T_ss < len(data) else 0.0
-            return T_ss, Sigma_ss
-    
-    # If no steady-state found, calculate from last quarter
-    last_quarter_start = max(window, len(data) // 4 * 3)
-    Sigma_ss = np.std(data[last_quarter_start:]) if data else 0.0
-    
-    return T_ss, Sigma_ss
 
 
 def plot_training_live(agent, episode: int, total_episodes: int, 
@@ -967,39 +914,14 @@ def plot_training_live(agent, episode: int, total_episodes: int,
     axes[1, 0].set_title('Wear Threshold Violations')
     axes[1, 0].grid(True, alpha=0.3)
     
-    # Plot 4: Wear Margins Before Replacement - WITH STEADY-STATE METRICS
+    # Plot 4: Wear Margins Before Replacement
     axes[1, 1].plot(episodes_range, margins, alpha=0.3, color='orange')
     axes[1, 1].plot(episodes_range, margins_smooth, color='darkorange', linewidth=1)
     axes[1, 1].axhline(y=0, color='black', linestyle='--', alpha=0.5, label='Optimal')
-    
-    # Detect and display steady-state metrics
-    T_ss, Sigma_ss = detect_steady_state(margins)
-    
-    # Add vertical line at T_ss (transition to steady-state)
-    if T_ss < len(margins):
-        axes[1, 1].axvline(x=T_ss, color='purple', linestyle=':', linewidth=2, alpha=0.7, label=f'T_ss={T_ss}')
-    
-    # Add steady-state band (±Sigma_ss around mean in steady-state region)
-    if T_ss < len(margins):
-        ss_mean = np.mean(margins[T_ss:])
-        axes[1, 1].fill_between(
-            range(T_ss, len(margins) + 1),
-            ss_mean - Sigma_ss,
-            ss_mean + Sigma_ss,
-            alpha=0.15,
-            color='purple',
-            label=f'σ_ss={Sigma_ss:.2f}'
-        )
-    
     axes[1, 1].set_xlabel('Episode')
     axes[1, 1].set_ylabel('Margin')
     axes[1, 1].set_title('Wear Margin Before Replacements')
-    axes[1, 1].legend(loc='best', fontsize=9)
     axes[1, 1].grid(True, alpha=0.3)
-    
-    # Store steady-state metrics in agent
-    agent.T_ss = T_ss
-    agent.Sigma_ss = Sigma_ss
     
     # Main title (fontweight='bold')
     # 1. Left align the full title & 2. Make the main model bold and the rest small/plain
@@ -1048,9 +970,7 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
             'Avg Replacements': np.mean(agent.episode_replacements[-20:]),
             'Avg Violations': np.mean(agent.episode_violations[-20:]),
             'Avg Margin': np.mean(agent.episode_margins[-20:]),
-            'Final Reward': agent.episode_rewards[-1] if len(agent.episode_rewards) > 0 else 0,
-            'T_ss': agent.T_ss if hasattr(agent, 'T_ss') and agent.T_ss is not None else 'N/A',
-            'Sigma_ss': agent.Sigma_ss if hasattr(agent, 'Sigma_ss') and agent.Sigma_ss is not None else 'N/A'
+            'Final Reward': agent.episode_rewards[-1] if len(agent.episode_rewards) > 0 else 0
         }
         comparison_data.append(metrics)
     
