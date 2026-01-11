@@ -2,7 +2,7 @@
 Reinforcement Learning for Predictive Maintenance
 Author: Rajesh Siraskar
 Date: 10-Jan-2026
-V.1.2 - 11-Jan-2026 - SB3 - Direction: RL for PdM with Attention Mechanisms
+V.2.0 - 11-Jan-2026 - SB3 and steady state - Working baseline
 """
 
 import streamlit as st

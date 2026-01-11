@@ -2,6 +2,8 @@
 RL-based Predictive Maintenance Module
 Custom Gymnasium environment and RL algorithms for milling machine tool wear prediction
 V.2.1 - 04-Jan-2026 - Margin-based reward structure for optimal replacement timing
+V.2.0 - 11-Jan-2026 - SB3 and steady state - Working baseline
+
 """
 
 import numpy as np
