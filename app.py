@@ -2,7 +2,7 @@
 Reinforcement Learning for Predictive Maintenance
 Author: Rajesh Siraskar
 Date: 10-Jan-2026
-V.2.0 - 11-Jan-2026 - SB3 and steady state - Working baseline
+V.2.1 - 11-Jan-2026 - Metrics stability issue
 """
 
 import streamlit as st
@@ -167,6 +167,23 @@ def save_uploaded_file(uploaded_file, prefix="temp"):
     return None
 
 
+def create_metric_snapshot(agent):
+    """
+    Create a frozen snapshot of agent metrics to prevent any future modifications.
+    This ensures metrics remain STATIC after training completes.
+    
+    Returns a dict with frozen (immutable) metric copies
+    """
+    return {
+        'episode_rewards': tuple(agent.episode_rewards) if hasattr(agent, 'episode_rewards') else (),
+        'episode_replacements': tuple(agent.episode_replacements) if hasattr(agent, 'episode_replacements') else (),
+        'episode_violations': tuple(agent.episode_violations) if hasattr(agent, 'episode_violations') else (),
+        'episode_margins': tuple(agent.episode_margins) if hasattr(agent, 'episode_margins') else (),
+        'T_ss': agent.T_ss if hasattr(agent, 'T_ss') else None,
+        'Sigma_ss': agent.Sigma_ss if hasattr(agent, 'Sigma_ss') else None,
+    }
+
+
 def training_callback(agent, episode, total_episodes):
     """Callback for live training updates"""
     # Update plots after EVERY episode for immediate feedback
@@ -255,18 +272,18 @@ def main():
         
         # AutoRL Button
         auto_rl_btn = st.button(
-            "🚀 AutoRL - All Algorithms",
+            "🚀 AutoRL",
             use_container_width=True,
             help="Train PPO, A2C, DQN, REINFORCE with and without attention"
         )
         
-        st.markdown("---")
+        # st.markdown("---")
         
         # SB3 Algorithms Section
         # st.markdown("**SB3 Algorithms:**")
         train_sb3_btn = st.button("Train PPO, A2C, DQN", use_container_width=True, help="Train all 3 SB3 algorithms with and without attention")
         
-        st.markdown("---")
+        # st.markdown("---")
         
         # REINFORCE Section
         # st.markdown("**REINFORCE:**")
@@ -372,11 +389,12 @@ def main():
                     # Store trained agent
                     st.session_state.trained_agents[display_name] = agent
                     
-                    # Store in training logs
+                    # Store in training logs with metric snapshot to ensure they never change
                     st.session_state.training_logs[display_name] = {
                         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         'episodes': episodes,
-                        'agent': agent
+                        'agent': agent,
+                        'metric_snapshot': create_metric_snapshot(agent)  # Frozen copy of metrics
                     }
                 
                 st.success(f"✅ {display_name} training completed!")
@@ -430,7 +448,8 @@ def main():
                         st.session_state.training_logs[display_name] = {
                             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             'episodes': episodes,
-                            'agent': agent
+                            'agent': agent,
+                            'metric_snapshot': create_metric_snapshot(agent)  # Frozen copy of metrics
                         }
                     
                     st.success(f"✅ {display_name} training completed!")
@@ -477,7 +496,8 @@ def main():
                     st.session_state.training_logs[display_name] = {
                         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         'episodes': episodes,
-                        'agent': agent
+                        'agent': agent,
+                        'metric_snapshot': create_metric_snapshot(agent)  # Frozen copy of metrics
                     }
                 
                 st.success(f"✅ {display_name} training completed!")
@@ -503,7 +523,10 @@ def main():
             
             # Display table
             st.markdown(f"### Performance Metrics: {st.session_state.get('data_info_str', '')}")
-            st.table(comparison_df)
+            
+            # Style the table with right-aligned columns
+            styled_df = comparison_df.style.set_properties(**{'text-align': 'right'}).map(lambda _: 'text-align: right')
+            st.dataframe(styled_df, use_container_width=True)
             
             # Display plots
             st.markdown("### Training Progress Comparison")
@@ -570,16 +593,29 @@ def main():
                     
                     agent = log_data['agent']
                     
+                    # Use metric snapshot if available, otherwise fall back to agent data
+                    if 'metric_snapshot' in log_data:
+                        snapshot = log_data['metric_snapshot']
+                        final_reward = snapshot['episode_rewards'][-1] if snapshot['episode_rewards'] else 0
+                        avg_replacements = np.mean(snapshot['episode_replacements']) if snapshot['episode_replacements'] else 0
+                        avg_violations = np.mean(snapshot['episode_violations']) if snapshot['episode_violations'] else 0
+                        avg_margin = np.mean(snapshot['episode_margins']) if snapshot['episode_margins'] else 0
+                    else:
+                        final_reward = agent.episode_rewards[-1] if agent.episode_rewards else 0
+                        avg_replacements = np.mean(agent.episode_replacements) if agent.episode_replacements else 0
+                        avg_violations = np.mean(agent.episode_violations) if agent.episode_violations else 0
+                        avg_margin = np.mean(agent.episode_margins) if agent.episode_margins else 0
+                    
                     # Show summary metrics
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Final Reward", f"{agent.episode_rewards[-1]:.2f}")
+                        st.metric("Final Reward", f"{final_reward:.2f}")
                     with col2:
-                        st.metric("Avg Replacements", f"{np.mean(agent.episode_replacements):.2f}")
+                        st.metric("Avg Replacements", f"{avg_replacements:.2f}")
                     with col3:
-                        st.metric("Avg Violations", f"{np.mean(agent.episode_violations):.2f}")
+                        st.metric("Avg Violations", f"{avg_violations:.2f}")
                     with col4:
-                        st.metric("Avg Margin", f"{np.mean(agent.episode_margins):.2f}")
+                        st.metric("Avg Margin", f"{avg_margin:.2f}")
                     
                     # Show plot
                     fig, axes = plot_training_live(

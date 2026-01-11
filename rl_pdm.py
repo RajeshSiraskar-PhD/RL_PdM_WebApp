@@ -1044,13 +1044,26 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     comparison_data = []
     
     for agent_name, agent in agents_dict.items():
+        # CRITICAL: Create frozen copies of metrics to ensure they can't change
+        # during comparison or when other functions access them
+        episode_rewards_snapshot = list(agent.episode_rewards) if hasattr(agent, 'episode_rewards') else []
+        episode_replacements_snapshot = list(agent.episode_replacements) if hasattr(agent, 'episode_replacements') else []
+        episode_violations_snapshot = list(agent.episode_violations) if hasattr(agent, 'episode_violations') else []
+        episode_margins_snapshot = list(agent.episode_margins) if hasattr(agent, 'episode_margins') else []
+        
+        # Format agent name - convert attention suffixes to short forms for display
+        display_name = agent_name
+        display_name = display_name.replace(' + Nadaraya-Watson', ' + NW')
+        display_name = display_name.replace(' + Deep-Learning', ' + DL')
+        
+        # Calculate metrics from snapshots (not from agent directly)
         metrics = {
-            'Agent': agent_name,
-            'Avg Reward': np.mean(agent.episode_rewards),  # All episodes (matches Training History)
-            'Avg Replacements': np.mean(agent.episode_replacements),
-            'Avg Violations': np.mean(agent.episode_violations),
-            'Avg Margin': np.mean(agent.episode_margins),
-            'Final Reward': agent.episode_rewards[-1] if len(agent.episode_rewards) > 0 else 0,
+            'Agent': display_name,
+            'Avg Reward': np.mean(episode_rewards_snapshot) if episode_rewards_snapshot else 0,
+            'Avg Replacements': np.mean(episode_replacements_snapshot) if episode_replacements_snapshot else 0,
+            'Avg Violations': np.mean(episode_violations_snapshot) if episode_violations_snapshot else 0,
+            'Avg Margin': np.mean(episode_margins_snapshot) if episode_margins_snapshot else 0,
+            'Final Reward': episode_rewards_snapshot[-1] if len(episode_rewards_snapshot) > 0 else 0,
             'T_ss': agent.T_ss if hasattr(agent, 'T_ss') and agent.T_ss is not None else 'N/A',
             'Sigma_ss': agent.Sigma_ss if hasattr(agent, 'Sigma_ss') and agent.Sigma_ss is not None else 'N/A'
         }
@@ -1059,11 +1072,21 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     # Create comparison DataFrame
     comparison_df = pd.DataFrame(comparison_data)
     
-    # Format numeric columns to 3 decimal places
+    # Format numeric columns to 3 decimal places ONLY
     numeric_cols = ['Avg Reward', 'Avg Replacements', 'Avg Violations', 'Avg Margin', 'Final Reward']
     for col in numeric_cols:
         if col in comparison_df.columns:
             comparison_df[col] = comparison_df[col].apply(lambda x: f"{x:.3f}")
+    
+    # Format T_ss and Sigma_ss to 3 decimal places if numeric
+    if 'T_ss' in comparison_df.columns:
+        comparison_df['T_ss'] = comparison_df['T_ss'].apply(
+            lambda x: f"{x:.3f}" if isinstance(x, (int, float)) and x != 'N/A' else x
+        )
+    if 'Sigma_ss' in comparison_df.columns:
+        comparison_df['Sigma_ss'] = comparison_df['Sigma_ss'].apply(
+            lambda x: f"{x:.3f}" if isinstance(x, (int, float)) and x != 'N/A' else x
+        )
     
     # Reset index to start from 1
     comparison_df.index = range(1, len(comparison_df) + 1)
@@ -1078,6 +1101,12 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     for idx, (agent_name, agent) in enumerate(agents_dict.items()):
         color = colors[idx % len(colors)]
         episodes = range(1, len(agent.episode_rewards) + 1)
+        
+        # Create short form legend label for plots
+        legend_label = agent_name
+        legend_label = legend_label.replace(' + Nadaraya-Watson', ' + NW')
+        legend_label = legend_label.replace(' + Deep-Learning', ' + DL')
+        legend_label = legend_label.replace('REINFORCE', 'RF')
         
         # Smooth data
         rewards_smooth = smooth_curve(agent.episode_rewards)
@@ -1094,10 +1123,10 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
         axes[1, 1].plot(episodes, agent.episode_margins, color=color, alpha=0.3, linewidth=1)
         
         # Smoothed data (solid)
-        axes[0, 0].plot(episodes, rewards_smooth, color=color, label=agent_name, linewidth=1.5)
-        axes[0, 1].plot(episodes, replacements_smooth, color=color, label=agent_name, linewidth=1.5)
-        axes[1, 0].plot(episodes, violations_smooth, color=color, label=agent_name, linewidth=1.5)
-        axes[1, 1].plot(episodes, margins_smooth, color=color, label=agent_name, linewidth=1.5)
+        axes[0, 0].plot(episodes, rewards_smooth, color=color, label=legend_label, linewidth=1.5)
+        axes[0, 1].plot(episodes, replacements_smooth, color=color, label=legend_label, linewidth=1.5)
+        axes[1, 0].plot(episodes, violations_smooth, color=color, label=legend_label, linewidth=1.5)
+        axes[1, 1].plot(episodes, margins_smooth, color=color, label=legend_label, linewidth=1.5)
     
     # Configure subplots
     axes[0, 0].set_title('Episode Rewards')
@@ -1346,11 +1375,16 @@ def train_ppo_agent(env: MT_Env, episodes: int, callback=None, attention_type: s
     
     model.learn(total_timesteps=total_timesteps, callback=training_callback, progress_bar=False)
     
-    # Store metrics in model for later access
-    model.episode_rewards = training_callback.episode_rewards
-    model.episode_replacements = training_callback.episode_replacements
-    model.episode_violations = training_callback.episode_violations
-    model.episode_margins = training_callback.episode_margins
+    # Store metrics in model for later access - Use COPIES to make them static/immutable
+    # This prevents any external code from modifying these lists after training completes
+    model.episode_rewards = list(training_callback.episode_rewards)  # Static copy
+    model.episode_replacements = list(training_callback.episode_replacements)  # Static copy
+    model.episode_violations = list(training_callback.episode_violations)  # Static copy
+    model.episode_margins = list(training_callback.episode_margins)  # Static copy
+    
+    # Initialize steady-state metrics (will be computed later if needed)
+    model.T_ss = None
+    model.Sigma_ss = None
     
     return model
 
@@ -1432,10 +1466,16 @@ def train_a2c_agent(env: MT_Env, episodes: int, callback=None, attention_type: s
     
     model.learn(total_timesteps=total_timesteps, callback=training_callback, progress_bar=False)
     
-    model.episode_rewards = training_callback.episode_rewards
-    model.episode_replacements = training_callback.episode_replacements
-    model.episode_violations = training_callback.episode_violations
-    model.episode_margins = training_callback.episode_margins
+    # Store metrics in model for later access - Use COPIES to make them static/immutable
+    # This prevents any external code from modifying these lists after training completes
+    model.episode_rewards = list(training_callback.episode_rewards)  # Static copy
+    model.episode_replacements = list(training_callback.episode_replacements)  # Static copy
+    model.episode_violations = list(training_callback.episode_violations)  # Static copy
+    model.episode_margins = list(training_callback.episode_margins)  # Static copy
+    
+    # Initialize steady-state metrics (will be computed later if needed)
+    model.T_ss = None
+    model.Sigma_ss = None
     
     return model
 
@@ -1520,10 +1560,16 @@ def train_dqn_agent(env: MT_Env, episodes: int, callback=None, attention_type: s
     
     model.learn(total_timesteps=total_timesteps, callback=training_callback, progress_bar=False)
     
-    model.episode_rewards = training_callback.episode_rewards
-    model.episode_replacements = training_callback.episode_replacements
-    model.episode_violations = training_callback.episode_violations
-    model.episode_margins = training_callback.episode_margins
+    # Store metrics in model for later access - Use COPIES to make them static/immutable
+    # This prevents any external code from modifying these lists after training completes
+    model.episode_rewards = list(training_callback.episode_rewards)  # Static copy
+    model.episode_replacements = list(training_callback.episode_replacements)  # Static copy
+    model.episode_violations = list(training_callback.episode_violations)  # Static copy
+    model.episode_margins = list(training_callback.episode_margins)  # Static copy
+    
+    # Initialize steady-state metrics (will be computed later if needed)
+    model.T_ss = None
+    model.Sigma_ss = None
     
     return model
 
