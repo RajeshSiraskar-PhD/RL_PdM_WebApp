@@ -14,6 +14,7 @@ import os
 import time
 from typing import Dict, Any
 import pickle
+from io import StringIO
 
 # Import RL module
 from rl_pdm import (
@@ -104,13 +105,14 @@ st.markdown("""
             color: #ffffff !important;
         }
 
-        /* Table header alignment */
+        /* Table header and cell alignment - RIGHT aligned */
         th {
             text-align: right !important;
             color: #d0d0d0 !important;
         }
         
         td {
+            text-align: right !important;
             color: #d0d0d0 !important;
         }
 
@@ -165,6 +167,72 @@ def save_uploaded_file(uploaded_file, prefix="temp"):
             f.write(uploaded_file.getbuffer())
         return file_path
     return None
+
+
+def extract_attention_method(agent_name: str) -> str:
+    """Extract attention method from agent name"""
+    if 'Nadaraya-Watson' in agent_name or 'NW' in agent_name:
+        return 'NW'
+    elif 'Deep-Learning' in agent_name or 'DL' in agent_name:
+        return 'DL'
+    else:
+        return 'None'
+
+
+def create_metrics_csv(trained_agents: Dict[str, Any], training_logs: Dict[str, Any], 
+                       training_data_name: str) -> str:
+    """
+    Create CSV with metrics for all trained agents
+    
+    Returns: CSV string that can be downloaded
+    """
+    metrics_list = []
+    
+    for agent_name, agent in trained_agents.items():
+        # Extract metrics
+        episode_rewards = list(agent.episode_rewards) if hasattr(agent, 'episode_rewards') else []
+        episode_replacements = list(agent.episode_replacements) if hasattr(agent, 'episode_replacements') else []
+        episode_violations = list(agent.episode_violations) if hasattr(agent, 'episode_violations') else []
+        episode_margins = list(agent.episode_margins) if hasattr(agent, 'episode_margins') else []
+        
+        # Get training parameters
+        episodes = len(episode_rewards)
+        learning_rate = agent.learning_rate if hasattr(agent, 'learning_rate') else 0.001
+        gamma = agent.gamma if hasattr(agent, 'gamma') else 0.99
+        
+        # Get steady-state metrics
+        t_ss = agent.T_ss if hasattr(agent, 'T_ss') and agent.T_ss is not None else ''
+        sigma_ss = agent.Sigma_ss if hasattr(agent, 'Sigma_ss') and agent.Sigma_ss is not None else ''
+        
+        # Calculate averages
+        avg_reward = np.mean(episode_rewards) if episode_rewards else 0
+        final_reward = episode_rewards[-1] if episode_rewards else 0
+        avg_replacements = np.mean(episode_replacements) if episode_replacements else 0
+        avg_violations = np.mean(episode_violations) if episode_violations else 0
+        avg_margin = np.mean(episode_margins) if episode_margins else 0
+        
+        # Extract attention method
+        attention_method = extract_attention_method(agent_name)
+        
+        metrics_list.append({
+            'Training Data': training_data_name,
+            'Agent': agent_name,
+            'Attention Method': attention_method,
+            'Avg Reward': f"{avg_reward:.3f}",
+            'Avg Replacements': f"{avg_replacements:.3f}",
+            'Avg Violations': f"{avg_violations:.3f}",
+            'Avg Margin': f"{avg_margin:.3f}",
+            'Final Reward': f"{final_reward:.3f}",
+            'T_ss': t_ss if isinstance(t_ss, str) else f"{t_ss:.3f}",
+            'Sigma_ss': sigma_ss if isinstance(sigma_ss, str) else f"{sigma_ss:.3f}",
+            'Episodes': episodes,
+            'Learning Rate': f"{learning_rate:.6f}",
+            'Gamma': f"{gamma:.2f}"
+        })
+    
+    # Create DataFrame and convert to CSV
+    df = pd.DataFrame(metrics_list)
+    return df.to_csv(index=False)
 
 
 def create_metric_snapshot(agent):
@@ -243,17 +311,17 @@ def main():
         # Episodes input
         episodes = st.number_input(
             "Training Episodes",
-            min_value=10,
+            min_value=20,
             max_value=1000,
             value=EPISODES,
-            step=10,
+            step=20,
             help="Number of episodes for training"
         )
         
         # Attention Mechanism Selection
         st.markdown("**Attention Mechanism:**")
         attention_type = st.radio(
-            "Select attention type",
+            "Select attention method",
             ["None", "Nadaraya-Watson", "Deep-Learning"],
             index=0,
             horizontal=True,
@@ -267,35 +335,22 @@ def main():
             "Deep-Learning": "simple"
         }
         selected_attention = attention_map[attention_type]
-        
         st.markdown("---")
         
-        # AutoRL Button
-        auto_rl_btn = st.button(
-            "🚀 AutoRL",
-            use_container_width=True,
-            help="Train PPO, A2C, DQN, REINFORCE with and without attention"
-        )
-        
+        # Algorithm buttons
+        auto_rl_btn = st.button("🚀 AutoRL", use_container_width=True) # help="Train PPO, A2C, DQN, REINFORCE with and without attention")
         # st.markdown("---")
-        
-        # SB3 Algorithms Section
         # st.markdown("**SB3 Algorithms:**")
-        train_sb3_btn = st.button("Train PPO, A2C, DQN", use_container_width=True, help="Train all 3 SB3 algorithms with and without attention")
-        
+        train_sb3_btn = st.button("Train PPO, A2C, DQN", use_container_width=True) #help="Train all 3 SB3 algorithms with and without attention")
         # st.markdown("---")
-        
-        # REINFORCE Section
         # st.markdown("**REINFORCE:**")
         train_reinforce_btn = st.button("Train REINFORCE", use_container_width=True)
-        
         st.markdown("---")
-        
         # Utility buttons
         compare_btn = st.button("📊 Compare Agents", use_container_width=True)
+        download_metrics_btn = st.button("⬇️ Download Metrics (CSV)", use_container_width=True)
         save_btn = st.button("💾 Save Agents and Plots", use_container_width=True)
         logs_btn = st.button("📋 Training Logs", use_container_width=True)
-        
         st.markdown("---")  # Horizontal line
         
         # ====================================================================
@@ -328,7 +383,7 @@ def main():
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.2.11 - 11-Jan-2026 - Mis-match in metrics fixed - Avg Reward, Replacements, Violations, Margin - All episodes')
+    st.markdown(' - V.2.12 - 11-Jan-2026 - Save metrics')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
@@ -524,8 +579,11 @@ def main():
             # Display table
             st.markdown(f"### Performance Metrics: {st.session_state.get('data_info_str', '')}")
             
-            # Style the table with right-aligned columns
-            styled_df = comparison_df.style.set_properties(**{'text-align': 'right'}).map(lambda _: 'text-align: right')
+            # Style the table with right-aligned columns for all columns
+            styled_df = comparison_df.style
+            # Right-align all columns
+            for col in comparison_df.columns:
+                styled_df = styled_df.set_properties(subset=[col], **{'text-align': 'right'})
             st.dataframe(styled_df, use_container_width=True)
             
             # Display plots
@@ -624,6 +682,47 @@ def main():
                         title_suffix=st.session_state.get('data_info_str', '')
                     )
                     st.pyplot(fig)
+    
+    # ====================================================================
+    # HANDLE DOWNLOAD METRICS
+    # ====================================================================
+    elif download_metrics_btn:
+        if len(st.session_state.trained_agents) == 0:
+            st.warning("⚠️ No agents to download metrics for! Train agents first.")
+        else:
+            st.session_state.current_view = 'download'
+            
+            # Get training data name
+            training_data_name = st.session_state.get('data_info_str', 'unknown_data')
+            
+            # Generate CSV
+            csv_data = create_metrics_csv(
+                st.session_state.trained_agents,
+                st.session_state.training_logs,
+                training_data_name
+            )
+            
+            # Create filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            safe_data_name = training_data_name.replace(' ', '_').replace('.csv', '').replace('/', '_')
+            filename = f"metrics_{safe_data_name}_{timestamp}.csv"
+            
+            # Display success message
+            st.success("✅ Metrics CSV ready for download!")
+            
+            # Provide download button
+            st.download_button(
+                label="📥 Download Metrics CSV",
+                data=csv_data,
+                file_name=filename,
+                mime="text/csv",
+                use_container_width=True
+            )
+            
+            # Display preview of CSV
+            st.subheader("CSV Preview")
+            metrics_df = pd.read_csv(StringIO(csv_data))
+            st.dataframe(metrics_df, use_container_width=True)
     
     # ====================================================================
     # HANDLE EVALUATION

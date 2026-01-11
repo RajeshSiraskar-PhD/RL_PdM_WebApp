@@ -566,6 +566,7 @@ class REINFORCEAgent:
         attention_type: 'none', 'simple', 'nadaraya'
         """
         self.env = env
+        self.learning_rate = learning_rate  # Store for later reference
         self.gamma = gamma
         self.attention_type = attention_type
         
@@ -791,6 +792,7 @@ class REINFORCEAgent:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'attention_type': self.attention_type,  # New field
             'gamma': self.gamma,
+            'learning_rate': self.learning_rate,  # Store learning rate
             'episode_rewards': self.episode_rewards,
             'episode_replacements': self.episode_replacements,
             'episode_violations': self.episode_violations,
@@ -829,6 +831,10 @@ class REINFORCEAgent:
         self.policy.load_state_dict(checkpoint['policy_state_dict'])
         self.optimizer = optim.Adam(self.policy.parameters())
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+        # Restore training parameters
+        self.gamma = checkpoint.get('gamma', GAMMA)
+        self.learning_rate = checkpoint.get('learning_rate', LEARNING_RATE)
         
         # Restore training history
         self.episode_rewards = checkpoint['episode_rewards']
@@ -1050,6 +1056,14 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
         episode_replacements_snapshot = list(agent.episode_replacements) if hasattr(agent, 'episode_replacements') else []
         episode_violations_snapshot = list(agent.episode_violations) if hasattr(agent, 'episode_violations') else []
         episode_margins_snapshot = list(agent.episode_margins) if hasattr(agent, 'episode_margins') else []
+        
+        # ENSURE T_ss and Sigma_ss are calculated if not already set
+        if not hasattr(agent, 'T_ss') or agent.T_ss is None:
+            if episode_margins_snapshot:
+                agent.T_ss, agent.Sigma_ss = detect_steady_state(episode_margins_snapshot)
+            else:
+                agent.T_ss = None
+                agent.Sigma_ss = None
         
         # Format agent name - convert attention suffixes to short forms for display
         display_name = agent_name
