@@ -1,8 +1,14 @@
 """
 Reinforcement Learning for Predictive Maintenance
 Author: Rajesh Siraskar
-Date: 10-Jan-2026
-V.1.2 - 11-Jan-2026 - SB3 - Direction: RL for PdM with Attention Mechanisms
+Date: 01-Jan-2026
+V.0.3 - 02-Jan-2026 - File loaded for IEEE Sensor data
+V.0.4 - 02-Jan-2026 - Updated environment for IEEE Sensor data
+V.0.41 - 02-Jan-2026 - Updated agent file name to include data info
+V.0.42 - 02-Jan-2026 - Show sensor data plot
+V.2.00 - 02-Jan-2026 - Attempt-1 to improve Attention 
+V.2.01 - 02-Jan-2026 - Add NW attention 
+V.2.02 - 03-Jan-2026 - PPO rewards 
 """
 
 import streamlit as st
@@ -17,7 +23,7 @@ import pickle
 
 # Import RL module
 from rl_pdm import (
-    MT_Env, REINFORCEAgent, train_ppo_agent, train_a2c_agent, train_dqn_agent,
+    MT_Env, REINFORCEAgent, train_ppo_agent, 
     plot_training_live, compare_agents, evaluate_agent, plot_sensor_data,
     WEAR_THRESHOLD, VIOLATION_THRESHOLD, EPISODES, R1, R2, R3
 )
@@ -36,25 +42,20 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-        /* Main App Background (Right Column) - Deep Night Blue 717171*/
+        /* Main App Background (Right Column) - Deep Night Blue 0f172a*/
         .stApp {
-            background-color: #0f172a;
-            color: #d0d0d0;
+            background-color: #717171;
         }
         
-        /* Sidebar Background (Left Column) - Dark Blue #9A9A9A*/
+        /* Sidebar Background (Left Column) - Dark Blue #1a1f3a*/
         [data-testid="stSidebar"] {
-            background-color: #1a1f3a ;
+            background-color: #9A9A9A;
             border-right: 1px solid #d1e7fbad;
         }
 
-        /* Adjusting text colors - Make all text light grey */
-        body, p, label, span, div {
-            color: #d0d0d0 !important;
-        }
-        
+        /* Adjusting text colors */
         h1 {
-            color: #E7E7E7;
+            color: #2C3E50;
             font-size: 28px !important;
             margin-top: -2rem !important;
             margin-bottom: -0.5rem !important;
@@ -67,27 +68,12 @@ st.markdown("""
             margin-bottom: 1rem !important;
         }
         h2 {
-            color: #E7E7E7;
+            color: #2C3E50;
             font-size: 22px !important;
         }
         h3 {
-            color: #E7E7E7;
+            color: #2C3E50;
             font-size: 18px !important;
-        }
-        
-        h4 {
-            color: #E7E7E7 !important;
-        }
-        
-        /* Text input, select, and other inputs */
-        input, select, textarea {
-            color: #d0d0d0 !important;
-            background-color: #2a2f45 !important;
-        }
-        
-        /* Radio button and checkbox labels */
-        [role="radio"], [role="checkbox"] {
-            color: #d0d0d0 !important;
         }
         
         /* Custom button styling */
@@ -107,11 +93,6 @@ st.markdown("""
         /* Table header alignment */
         th {
             text-align: right !important;
-            color: #d0d0d0 !important;
-        }
-        
-        td {
-            color: #d0d0d0 !important;
         }
 
         /* Reduce Main Content Top Padding (Target A) */
@@ -233,51 +214,29 @@ def main():
             help="Number of episodes for training"
         )
         
-        # Attention Mechanism Selection
-        st.markdown("**Attention Mechanism:**")
-        attention_type = st.radio(
-            "Select attention type",
-            ["None", "Nadaraya-Watson", "Deep-Learning"],
-            index=0,
-            horizontal=True,
-            label_visibility="collapsed"
-        )
-        
-        # Map attention_type selection to internal values
-        attention_map = {
-            "None": "none",
-            "Nadaraya-Watson": "nadaraya",
-            "Deep-Learning": "simple"
-        }
-        selected_attention = attention_map[attention_type]
-        
+        # Training buttons
+        col1, col2, col3 = st.columns(3)
+        with col1:
+             auto_rl_btn = st.button("AutoRL-All", use_container_width=True, help="Train PPO, RF, RF+Att, RF+NW")
+        with col2:
+             auto_rl_ppo_btn = st.button("AutoRL-PPO", use_container_width=True, help="Train PPO, PPO+Att, PPO+NW")
+        with col3:
+             auto_rl_rf_btn = st.button("AutoRL-RF", use_container_width=True, help="Train RF, RF+Att, RF+NW")
+
         st.markdown("---")
+        train_ppo_btn = st.button("Train PPO", use_container_width=True)
+        train_ppo_attention_btn = st.button("PPO + Attention", use_container_width=True)
+        train_ppo_nw_attention_btn = st.button("PPO + NW Attention", use_container_width=True)
+        train_reinforce_btn = st.button("Train REINFORCE Agent", use_container_width=True)
+        train_attention_btn = st.button("REINFORCE + Attention", use_container_width=True)
+        train_nw_attention_btn = st.button("REINFORCE + NW Attention", use_container_width=True)
         
-        # AutoRL Button
-        auto_rl_btn = st.button(
-            "🚀 AutoRL - All Algorithms",
-            use_container_width=True,
-            help="Train PPO, A2C, DQN, REINFORCE with and without attention"
-        )
-        
-        st.markdown("---")
-        
-        # SB3 Algorithms Section
-        # st.markdown("**SB3 Algorithms:**")
-        train_sb3_btn = st.button("Train PPO, A2C, DQN", use_container_width=True, help="Train all 3 SB3 algorithms with and without attention")
-        
-        st.markdown("---")
-        
-        # REINFORCE Section
-        # st.markdown("**REINFORCE:**")
-        train_reinforce_btn = st.button("Train REINFORCE", use_container_width=True)
-        
-        st.markdown("---")
+        # st.markdown("---")  # Separator
         
         # Utility buttons
-        compare_btn = st.button("📊 Compare Agents", use_container_width=True)
-        save_btn = st.button("💾 Save Agents and Plots", use_container_width=True)
-        logs_btn = st.button("📋 Training Logs", use_container_width=True)
+        compare_btn = st.button("Compare Agents", use_container_width=True)
+        save_btn = st.button("Save Agents and Plots", use_container_width=True)
+        logs_btn = st.button("Training Logs", use_container_width=True)
         
         st.markdown("---")  # Horizontal line
         
@@ -299,7 +258,7 @@ def main():
             st.success(f"✓ Loaded: {eval_file.name}")
         
         # Evaluation button
-        evaluate_btn = st.button("🔍 Evaluate", use_container_width=True)
+        evaluate_btn = st.button("Evaluate", use_container_width=True)
         
 
     
@@ -311,32 +270,43 @@ def main():
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.2.11 - 11-Jan-2026 - Mis-match in metrics fixed - Avg Reward, Replacements, Violations, Margin - All episodes')
+    st.markdown(' - V.2- 07-Jan-2026 - SB3')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
     # ====================================================================
-    if auto_rl_btn:
+    if auto_rl_btn or auto_rl_ppo_btn or auto_rl_rf_btn:
         if st.session_state.training_data_file is None:
             st.error("⚠️ Please upload training data first!")
         else:
             st.session_state.current_view = 'training'
             
-            # Sequence of algorithms to train with and without attention
-            algos = ['PPO', 'A2C', 'DQN', 'REINFORCE']
-            attentions = ['none', selected_attention]
+            # Sequence of agents to train
+            if auto_rl_btn:
+                training_sequence = [
+                    ('PPO', 'PPO'), 
+                    ('REINFORCE', 'REINFORCE'), 
+                    ('REINFORCE_ATTENTION', 'REINFORCE + Attention'),
+                    ('REINFORCE_NW_ATTENTION', 'REINFORCE + NW Attention')
+                ]
+                sequence_name = "AutoRL-All"
+            elif auto_rl_ppo_btn:
+                training_sequence = [
+                    ('PPO', 'PPO'), 
+                    ('PPO_ATTENTION', 'PPO + Attention'), 
+                    ('PPO_NW_ATTENTION', 'PPO + NW Attention')
+                ]
+                sequence_name = "AutoRL-PPO"
+            else: # auto_rl_rf_btn
+                training_sequence = [
+                    ('REINFORCE', 'REINFORCE'), 
+                    ('REINFORCE_ATTENTION', 'REINFORCE + Attention'),
+                    ('REINFORCE_NW_ATTENTION', 'REINFORCE + NW Attention')
+                ]
+                sequence_name = "AutoRL-RF"
+
             
-            training_sequence = []
-            for algo in algos:
-                for attn in attentions:
-                    attn_name = {
-                        'none': '',
-                        'nadaraya': ' + Nadaraya-Watson',
-                        'simple': ' + Deep-Learning'
-                    }[attn]
-                    training_sequence.append((algo, attn, f"{algo}{attn_name}"))
-            
-            # Construct data info string
+            # Construct data info string for plots
             file_name = os.path.basename(st.session_state.training_data_file) if st.session_state.training_data_file else "Unknown"
             st.session_state.data_info_str = f"{st.session_state.get('data_source', 'Data')} - {file_name}"
             
@@ -347,143 +317,118 @@ def main():
             st.session_state.plot_placeholder = st.empty()
             
             # Iterate through sequence
-            for algo, attn_type, display_name in training_sequence:
-                st.session_state.current_agent_name = display_name
+            for agent_type, agent_name in training_sequence:
+                st.session_state.current_agent_name = agent_name
                 
                 # Reset training fig/axes for new plot
                 st.session_state.current_training_fig = None
                 st.session_state.current_training_axes = None
                 
-                with st.spinner(f'🔄 Training {display_name}...'):
-                    # Train agent based on algorithm
-                    if algo == 'PPO':
-                        from rl_pdm import train_ppo_agent
-                        agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                    elif algo == 'A2C':
-                        from rl_pdm import train_a2c_agent
-                        agent = train_a2c_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                    elif algo == 'DQN':
-                        from rl_pdm import train_dqn_agent
-                        agent = train_dqn_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                    else:  # REINFORCE
-                        agent = REINFORCEAgent(env, attention_type=attn_type)
+                with st.spinner(f'🔄 {sequence_name}: Training {agent_name}...'):
+                    # Train agent
+                    if agent_type == 'PPO':
+                        agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='none')
+                    elif agent_type == 'PPO_ATTENTION':
+                        agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='simple')
+                    elif agent_type == 'PPO_NW_ATTENTION':
+                        agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='nadaraya')
+                    else:
+                        attention_type = 'none'
+                        if agent_type == 'REINFORCE_ATTENTION':
+                            attention_type = 'simple'
+                        elif agent_type == 'REINFORCE_NW_ATTENTION':
+                            attention_type = 'nadaraya'
+                            
+                        agent = REINFORCEAgent(env, attention_type=attention_type)
                         agent.learn(episodes, callback=training_callback)
                     
                     # Store trained agent
-                    st.session_state.trained_agents[display_name] = agent
+                    st.session_state.trained_agents[agent_name] = agent
                     
                     # Store in training logs
-                    st.session_state.training_logs[display_name] = {
+                    st.session_state.training_logs[agent_name] = {
                         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         'episodes': episodes,
                         'agent': agent
                     }
                 
-                st.success(f"✅ {display_name} training completed!")
-                time.sleep(0.5)
+                st.success(f"✅ {agent_name} training completed!")
+                # Short pause to let user see the success message/plot before moving to next
+                time.sleep(1)
             
-            st.toast("🎉 AutoRL sequence completed!")
+            st.toast(f"{sequence_name} sequence completed!")
 
-    elif train_sb3_btn:
+    elif train_ppo_btn or train_reinforce_btn or train_attention_btn or train_nw_attention_btn or train_ppo_attention_btn or train_ppo_nw_attention_btn:
         if st.session_state.training_data_file is None:
             st.error("⚠️ Please upload training data first!")
         else:
+            # Determine agent type
+            if train_ppo_btn:
+                agent_type = 'PPO'
+                agent_name = 'PPO'
+            elif train_ppo_attention_btn:
+                agent_type = 'PPO_ATTENTION'
+                agent_name = 'PPO + Attention'
+            elif train_ppo_nw_attention_btn:
+                agent_type = 'PPO_NW_ATTENTION'
+                agent_name = 'PPO + NW Attention'
+            elif train_reinforce_btn:
+                agent_type = 'REINFORCE'
+                agent_name = 'REINFORCE'
+            elif train_attention_btn:
+                agent_type = 'REINFORCE_ATTENTION'
+                agent_name = 'REINFORCE + Attention'
+            else:
+                agent_type = 'REINFORCE_NW_ATTENTION'
+                agent_name = 'REINFORCE + NW Attention'
+            
+            st.session_state.current_agent_name = agent_name
             st.session_state.current_view = 'training'
             
-            # Train all 3 SB3 algorithms with and without attention
-            algos = ['PPO', 'A2C', 'DQN']
-            attentions = ['none', selected_attention]
-            
-            # Construct data info string
-            file_name = os.path.basename(st.session_state.training_data_file) if st.session_state.training_data_file else "Unknown"
-            st.session_state.data_info_str = f"{st.session_state.get('data_source', 'Data')} - {file_name}"
-            
-            # Create environment (reused for all)
-            env = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1/10, R2, R3/10)
-            
-            # Initialize plot placeholder
-            st.session_state.plot_placeholder = st.empty()
-            
-            # Iterate through SB3 algorithms and attention types
-            for algo in algos:
-                for attn_type in attentions:
-                    attn_name = {
-                        'none': '',
-                        'nadaraya': ' + Nadaraya-Watson',
-                        'simple': ' + Deep-Learning'
-                    }[attn_type]
-                    display_name = f"{algo}{attn_name}"
-                    
-                    st.session_state.current_agent_name = display_name
-                    st.session_state.current_training_fig = None
-                    st.session_state.current_training_axes = None
-                    
-                    with st.spinner(f'🔄 Training {display_name}...'):
-                        if algo == 'PPO':
-                            agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                        elif algo == 'A2C':
-                            agent = train_a2c_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                        else:  # DQN
-                            agent = train_dqn_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                        
-                        st.session_state.trained_agents[display_name] = agent
-                        st.session_state.training_logs[display_name] = {
-                            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            'episodes': episodes,
-                            'agent': agent
-                        }
-                    
-                    st.success(f"✅ {display_name} training completed!")
-                    time.sleep(0.5)
-            
-            st.toast("🎉 SB3 Algorithms training sequence completed!")
-
-    elif train_reinforce_btn:
-        if st.session_state.training_data_file is None:
-            st.error("⚠️ Please upload training data first!")
-        else:
-            st.session_state.current_view = 'training'
-            
-            # Train REINFORCE with and without attention
-            attentions = ['none', selected_attention]
-            
-            # Construct data info string
+            # Construct data info string for plots
             file_name = os.path.basename(st.session_state.training_data_file) if st.session_state.training_data_file else "Unknown"
             st.session_state.data_info_str = f"{st.session_state.get('data_source', 'Data')} - {file_name}"
             
             # Create environment
-            env = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1/10, R2, R3/10)
+            env = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1, R2, R3)
             
             # Initialize plot placeholder
             st.session_state.plot_placeholder = st.empty()
             
-            for attn_type in attentions:
-                attn_name = {
-                    'none': '',
-                    'nadaraya': ' + Nadaraya-Watson',
-                    'simple': ' + Deep-Learning'
-                }[attn_type]
-                display_name = f"REINFORCE{attn_name}"
-                
-                st.session_state.current_agent_name = display_name
-                st.session_state.current_training_fig = None
-                st.session_state.current_training_axes = None
-                
-                with st.spinner(f'🔄 Training {display_name}...'):
-                    agent = REINFORCEAgent(env, attention_type=attn_type)
-                    agent.learn(episodes, callback=training_callback)
-                    
-                    st.session_state.trained_agents[display_name] = agent
-                    st.session_state.training_logs[display_name] = {
-                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        'episodes': episodes,
-                        'agent': agent
-                    }
-                
-                st.success(f"✅ {display_name} training completed!")
-                time.sleep(0.5)
+            # Reset training fig/axes
+            st.session_state.current_training_fig = None
+            st.session_state.current_training_axes = None
             
-            st.toast("🎉 REINFORCE training sequence completed!")
+            # Show training message
+            with st.spinner(f'🔄 Training {agent_name}...'):
+                # Train agent
+                if agent_type == 'PPO':
+                    agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='none')
+                elif agent_type == 'PPO_ATTENTION':
+                    agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='simple')
+                elif agent_type == 'PPO_NW_ATTENTION':
+                    agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type='nadaraya')
+                else:
+                    attention_type = 'none'
+                    if agent_type == 'REINFORCE_ATTENTION':
+                        attention_type = 'simple'
+                    elif agent_type == 'REINFORCE_NW_ATTENTION':
+                        attention_type = 'nadaraya'
+                        
+                    agent = REINFORCEAgent(env, attention_type=attention_type)
+                    agent.learn(episodes, callback=training_callback)
+                
+                # Store trained agent
+                st.session_state.trained_agents[agent_name] = agent
+                
+                # Store in training logs
+                st.session_state.training_logs[agent_name] = {
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'episodes': episodes,
+                    'agent': agent
+                }
+            
+            st.success(f"✅ {agent_name} training completed!")
     
     # ====================================================================
     # HANDLE COMPARISON

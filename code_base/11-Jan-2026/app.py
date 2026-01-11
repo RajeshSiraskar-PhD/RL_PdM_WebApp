@@ -2,7 +2,7 @@
 Reinforcement Learning for Predictive Maintenance
 Author: Rajesh Siraskar
 Date: 10-Jan-2026
-V.1.2 - 11-Jan-2026 - SB3 - Direction: RL for PdM with Attention Mechanisms
+V.1.1 - 10-Jan-2026 - SB3 - Direction: RL for PdM with Attention Mechanisms
 """
 
 import streamlit as st
@@ -263,14 +263,19 @@ def main():
         st.markdown("---")
         
         # SB3 Algorithms Section
-        # st.markdown("**SB3 Algorithms:**")
-        train_sb3_btn = st.button("Train PPO, A2C, DQN", use_container_width=True, help="Train all 3 SB3 algorithms with and without attention")
+        st.markdown("**SB3 Algorithms:**")
+        col1, col2 = st.columns(2)
+        with col1:
+            train_ppo_btn = st.button("PPO", use_container_width=True)
+            train_a2c_btn = st.button("A2C", use_container_width=True)
+        with col2:
+            train_dqn_btn = st.button("DQN", use_container_width=True)
         
         st.markdown("---")
         
         # REINFORCE Section
-        # st.markdown("**REINFORCE:**")
-        train_reinforce_btn = st.button("Train REINFORCE", use_container_width=True)
+        st.markdown("**REINFORCE:**")
+        train_reinforce_btn = st.button("REINFORCE", use_container_width=True)
         
         st.markdown("---")
         
@@ -311,7 +316,7 @@ def main():
         <h2 style='text-align: left; color: #0492C2; padding: 4px;'>Reinforcement Learning for Predictive Maintenance</h2>
             """, unsafe_allow_html=True)
             
-    st.markdown(' - V.2.11 - 11-Jan-2026 - Mis-match in metrics fixed - Avg Reward, Replacements, Violations, Margin - All episodes')
+    st.markdown(' - V.2.0 - 11-Jan-2026 - SB3')
     
     # ====================================================================
     # HANDLE TRAINING ACTIONS
@@ -384,59 +389,67 @@ def main():
             
             st.toast("🎉 AutoRL sequence completed!")
 
-    elif train_sb3_btn:
+    elif train_ppo_btn or train_a2c_btn or train_dqn_btn:
         if st.session_state.training_data_file is None:
             st.error("⚠️ Please upload training data first!")
         else:
+            # Determine algorithm type
+            if train_ppo_btn:
+                algo_name = 'PPO'
+            elif train_a2c_btn:
+                algo_name = 'A2C'
+            else:
+                algo_name = 'DQN'
+            
             st.session_state.current_view = 'training'
             
-            # Train all 3 SB3 algorithms with and without attention
-            algos = ['PPO', 'A2C', 'DQN']
+            # Train with and without attention
             attentions = ['none', selected_attention]
             
             # Construct data info string
             file_name = os.path.basename(st.session_state.training_data_file) if st.session_state.training_data_file else "Unknown"
             st.session_state.data_info_str = f"{st.session_state.get('data_source', 'Data')} - {file_name}"
             
-            # Create environment (reused for all)
+            # Create environment
             env = MT_Env(st.session_state.training_data_file, WEAR_THRESHOLD, R1/10, R2, R3/10)
             
             # Initialize plot placeholder
             st.session_state.plot_placeholder = st.empty()
             
-            # Iterate through SB3 algorithms and attention types
-            for algo in algos:
-                for attn_type in attentions:
-                    attn_name = {
-                        'none': '',
-                        'nadaraya': ' + Nadaraya-Watson',
-                        'simple': ' + Deep-Learning'
-                    }[attn_type]
-                    display_name = f"{algo}{attn_name}"
+            for attn_type in attentions:
+                attn_name = {
+                    'none': '',
+                    'nadaraya': ' + Nadaraya-Watson',
+                    'simple': ' + Deep-Learning'
+                }[attn_type]
+                display_name = f"{algo_name}{attn_name}"
+                
+                st.session_state.current_agent_name = display_name
+                st.session_state.current_training_fig = None
+                st.session_state.current_training_axes = None
+                
+                with st.spinner(f'🔄 Training {display_name}...'):
+                    if algo_name == 'PPO':
+                        from rl_pdm import train_ppo_agent
+                        agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type=attn_type)
+                    elif algo_name == 'A2C':
+                        from rl_pdm import train_a2c_agent
+                        agent = train_a2c_agent(env, episodes, callback=training_callback, attention_type=attn_type)
+                    else:  # DQN
+                        from rl_pdm import train_dqn_agent
+                        agent = train_dqn_agent(env, episodes, callback=training_callback, attention_type=attn_type)
                     
-                    st.session_state.current_agent_name = display_name
-                    st.session_state.current_training_fig = None
-                    st.session_state.current_training_axes = None
-                    
-                    with st.spinner(f'🔄 Training {display_name}...'):
-                        if algo == 'PPO':
-                            agent = train_ppo_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                        elif algo == 'A2C':
-                            agent = train_a2c_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                        else:  # DQN
-                            agent = train_dqn_agent(env, episodes, callback=training_callback, attention_type=attn_type)
-                        
-                        st.session_state.trained_agents[display_name] = agent
-                        st.session_state.training_logs[display_name] = {
-                            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            'episodes': episodes,
-                            'agent': agent
-                        }
-                    
-                    st.success(f"✅ {display_name} training completed!")
-                    time.sleep(0.5)
+                    st.session_state.trained_agents[display_name] = agent
+                    st.session_state.training_logs[display_name] = {
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'episodes': episodes,
+                        'agent': agent
+                    }
+                
+                st.success(f"✅ {display_name} training completed!")
+                time.sleep(0.5)
             
-            st.toast("🎉 SB3 Algorithms training sequence completed!")
+            st.toast(f"🎉 {algo_name} training sequence completed!")
 
     elif train_reinforce_btn:
         if st.session_state.training_data_file is None:

@@ -14,7 +14,7 @@ import torch.optim as optim
 from torch.distributions import Categorical
 import matplotlib.pyplot as plt
 import seaborn as sns
-from stable_baselines3 import PPO, A2C, DQN
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 import os
 from datetime import datetime
@@ -1044,10 +1044,10 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     for agent_name, agent in agents_dict.items():
         metrics = {
             'Agent': agent_name,
-            'Avg Reward': np.mean(agent.episode_rewards),  # All episodes (matches Training History)
-            'Avg Replacements': np.mean(agent.episode_replacements),
-            'Avg Violations': np.mean(agent.episode_violations),
-            'Avg Margin': np.mean(agent.episode_margins),
+            'Avg Reward': np.mean(agent.episode_rewards[-20:]),  # Last 20 episodes
+            'Avg Replacements': np.mean(agent.episode_replacements[-20:]),
+            'Avg Violations': np.mean(agent.episode_violations[-20:]),
+            'Avg Margin': np.mean(agent.episode_margins[-20:]),
             'Final Reward': agent.episode_rewards[-1] if len(agent.episode_rewards) > 0 else 0,
             'T_ss': agent.T_ss if hasattr(agent, 'T_ss') and agent.T_ss is not None else 'N/A',
             'Sigma_ss': agent.Sigma_ss if hasattr(agent, 'Sigma_ss') and agent.Sigma_ss is not None else 'N/A'
@@ -1056,16 +1056,6 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     
     # Create comparison DataFrame
     comparison_df = pd.DataFrame(comparison_data)
-    
-    # Format numeric columns to 3 decimal places
-    numeric_cols = ['Avg Reward', 'Avg Replacements', 'Avg Violations', 'Avg Margin', 'Final Reward']
-    for col in numeric_cols:
-        if col in comparison_df.columns:
-            comparison_df[col] = comparison_df[col].apply(lambda x: f"{x:.3f}")
-    
-    # Reset index to start from 1
-    comparison_df.index = range(1, len(comparison_df) + 1)
-    comparison_df.index.name = None
     
     # Create comparison plots    
     fig, axes = plt.subplots(2, 2, figsize=(W, H))
@@ -1345,179 +1335,6 @@ def train_ppo_agent(env: MT_Env, episodes: int, callback=None, attention_type: s
     model.learn(total_timesteps=total_timesteps, callback=training_callback, progress_bar=False)
     
     # Store metrics in model for later access
-    model.episode_rewards = training_callback.episode_rewards
-    model.episode_replacements = training_callback.episode_replacements
-    model.episode_violations = training_callback.episode_violations
-    model.episode_margins = training_callback.episode_margins
-    
-    return model
-
-
-def train_a2c_agent(env: MT_Env, episodes: int, callback=None, attention_type: str = 'none') -> A2C:
-    """
-    Train A2C agent using Stable Baselines3
-    attention_type: 'none', 'simple', 'nadaraya'
-    """
-    from stable_baselines3.common.callbacks import BaseCallback
-    
-    class TrainingCallback(BaseCallback):
-        def __init__(self, callback_fn, total_episodes):
-            super().__init__()
-            self.callback_fn = callback_fn
-            self.total_episodes = total_episodes
-            self.episode_rewards = []
-            self.episode_replacements = []
-            self.episode_violations = []
-            self.episode_margins = []
-            self.current_episode = 0
-            self.episode_reward = 0
-            self.episode_info = {'replacements': 0, 'violations': 0, 'margins': []}
-            self.update_interval = LIVE_PLOT_UPDATE_INTERVAL
-        
-        def _on_step(self):
-            self.episode_reward += self.locals['rewards'][0]
-            
-            info = self.locals['infos'][0]
-            if info.get('replacement', False):
-                self.episode_info['replacements'] += 1
-                self.episode_info['margins'].append(info.get('wear_margin', 0))
-            if info.get('violation', False):
-                self.episode_info['violations'] += 1
-            
-            if self.locals['dones'][0]:
-                self.episode_rewards.append(self.episode_reward)
-                self.episode_replacements.append(self.episode_info['replacements'])
-                self.episode_violations.append(self.episode_info['violations'])
-                
-                avg_margin = np.mean(self.episode_info['margins']) if len(self.episode_info['margins']) > 0 else 0
-                self.episode_margins.append(avg_margin)
-                
-                should_update = (self.current_episode + 1) % self.update_interval == 0 or self.current_episode == 0 or self.current_episode == self.total_episodes - 1
-                if self.callback_fn and should_update:
-                    self.callback_fn(self, self.current_episode, self.total_episodes)
-                
-                self.current_episode += 1
-                self.episode_reward = 0
-                self.episode_info = {'replacements': 0, 'violations': 0, 'margins': []}
-                
-                if self.current_episode >= self.total_episodes:
-                    return False
-            
-            return True
-    
-    policy_kwargs = None
-    
-    if attention_type == 'simple':
-        policy_kwargs = dict(
-            features_extractor_class=AttentionExtractor,
-            features_extractor_kwargs=dict(features_dim=128),
-            net_arch=[]
-        )
-    elif attention_type == 'nadaraya':
-        policy_kwargs = dict(
-            features_extractor_class=NadarayaWatsonExtractor,
-            features_extractor_kwargs=dict(features_dim=128, n_prototypes=16),
-            net_arch=[]
-        )
-    
-    model = A2C("MlpPolicy", env, verbose=0,
-                learning_rate=LEARNING_RATE,
-                gamma=GAMMA,
-                policy_kwargs=policy_kwargs)
-    
-    training_callback = TrainingCallback(callback, episodes)
-    total_timesteps = episodes * env.total_steps
-    
-    model.learn(total_timesteps=total_timesteps, callback=training_callback, progress_bar=False)
-    
-    model.episode_rewards = training_callback.episode_rewards
-    model.episode_replacements = training_callback.episode_replacements
-    model.episode_violations = training_callback.episode_violations
-    model.episode_margins = training_callback.episode_margins
-    
-    return model
-
-
-def train_dqn_agent(env: MT_Env, episodes: int, callback=None, attention_type: str = 'none') -> DQN:
-    """
-    Train DQN agent using Stable Baselines3
-    attention_type: 'none', 'simple', 'nadaraya'
-    """
-    from stable_baselines3.common.callbacks import BaseCallback
-    
-    class TrainingCallback(BaseCallback):
-        def __init__(self, callback_fn, total_episodes):
-            super().__init__()
-            self.callback_fn = callback_fn
-            self.total_episodes = total_episodes
-            self.episode_rewards = []
-            self.episode_replacements = []
-            self.episode_violations = []
-            self.episode_margins = []
-            self.current_episode = 0
-            self.episode_reward = 0
-            self.episode_info = {'replacements': 0, 'violations': 0, 'margins': []}
-            self.update_interval = LIVE_PLOT_UPDATE_INTERVAL
-        
-        def _on_step(self):
-            self.episode_reward += self.locals['rewards'][0]
-            
-            info = self.locals['infos'][0]
-            if info.get('replacement', False):
-                self.episode_info['replacements'] += 1
-                self.episode_info['margins'].append(info.get('wear_margin', 0))
-            if info.get('violation', False):
-                self.episode_info['violations'] += 1
-            
-            if self.locals['dones'][0]:
-                self.episode_rewards.append(self.episode_reward)
-                self.episode_replacements.append(self.episode_info['replacements'])
-                self.episode_violations.append(self.episode_info['violations'])
-                
-                avg_margin = np.mean(self.episode_info['margins']) if len(self.episode_info['margins']) > 0 else 0
-                self.episode_margins.append(avg_margin)
-                
-                should_update = (self.current_episode + 1) % self.update_interval == 0 or self.current_episode == 0 or self.current_episode == self.total_episodes - 1
-                if self.callback_fn and should_update:
-                    self.callback_fn(self, self.current_episode, self.total_episodes)
-                
-                self.current_episode += 1
-                self.episode_reward = 0
-                self.episode_info = {'replacements': 0, 'violations': 0, 'margins': []}
-                
-                if self.current_episode >= self.total_episodes:
-                    return False
-            
-            return True
-    
-    policy_kwargs = None
-    
-    if attention_type == 'simple':
-        policy_kwargs = dict(
-            features_extractor_class=AttentionExtractor,
-            features_extractor_kwargs=dict(features_dim=128),
-            net_arch=[]
-        )
-    elif attention_type == 'nadaraya':
-        policy_kwargs = dict(
-            features_extractor_class=NadarayaWatsonExtractor,
-            features_extractor_kwargs=dict(features_dim=128, n_prototypes=16),
-            net_arch=[]
-        )
-    
-    model = DQN("MlpPolicy", env, verbose=0,
-                learning_rate=LEARNING_RATE,
-                gamma=GAMMA,
-                policy_kwargs=policy_kwargs,
-                exploration_fraction=0.1,
-                exploration_initial_eps=1.0,
-                exploration_final_eps=0.05)
-    
-    training_callback = TrainingCallback(callback, episodes)
-    total_timesteps = episodes * env.total_steps
-    
-    model.learn(total_timesteps=total_timesteps, callback=training_callback, progress_bar=False)
-    
     model.episode_rewards = training_callback.episode_rewards
     model.episode_replacements = training_callback.episode_replacements
     model.episode_violations = training_callback.episode_violations

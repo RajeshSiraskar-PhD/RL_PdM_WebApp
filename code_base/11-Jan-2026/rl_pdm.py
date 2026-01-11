@@ -1044,10 +1044,10 @@ def compare_agents(agents_dict: Dict[str, Any], save_path: Optional[str] = None,
     for agent_name, agent in agents_dict.items():
         metrics = {
             'Agent': agent_name,
-            'Avg Reward': np.mean(agent.episode_rewards),  # All episodes (matches Training History)
-            'Avg Replacements': np.mean(agent.episode_replacements),
-            'Avg Violations': np.mean(agent.episode_violations),
-            'Avg Margin': np.mean(agent.episode_margins),
+            'Avg Reward': np.mean(agent.episode_rewards[-20:]),  # Last 20 episodes
+            'Avg Replacements': np.mean(agent.episode_replacements[-20:]),
+            'Avg Violations': np.mean(agent.episode_violations[-20:]),
+            'Avg Margin': np.mean(agent.episode_margins[-20:]),
             'Final Reward': agent.episode_rewards[-1] if len(agent.episode_rewards) > 0 else 0,
             'T_ss': agent.T_ss if hasattr(agent, 'T_ss') and agent.T_ss is not None else 'N/A',
             'Sigma_ss': agent.Sigma_ss if hasattr(agent, 'Sigma_ss') and agent.Sigma_ss is not None else 'N/A'
