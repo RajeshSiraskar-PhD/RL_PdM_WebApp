@@ -1,0 +1,71 @@
+# ------------------------------------------------------------------------
+# IMPROVEMENTS 
+# ------------------------------------------------------------------------
+Variants: 
+	(1) Variable timesteps 
+	(2) Fixed timesteps
+	(3) Downsampled timesteps - take lowest, downsample others to match lowest
+
+# ------------------------------------------------------------------------
+# AutoRL and Attention
+# PROMPT 18-Jan-2026
+# ------------------------------------------------------------------------
+
+Topic: AutoRL i.e. Auto train agent using Reinforcement Learning (RL) for predictive maintenance of a milling machine.
+
+Create a web app using StreamLit that auto-trains an RL agent using grid-search on upto 4 hyperparameters. For starters we will stick to two - Learning Rate and Gamma.
+
+Web-app design: Use a 'dark' theme. Deep-blue / slate-blue type backgrounds and light grey or pastel yellow for texts. Create a 2 panel layout of width 30:70 (left:right).
+
+# Part A: RL related code in file rl_pdm.py:
+
+1. Create a custom environment 'MT_Env' based on OpenAI's Gymnasium. 
+- It is initiated using a sensor data file, wear threshold and three reward parameters. 
+- Environment should work for TWO types of data schemas: IEEE and SIT
+	- IEEE features: Time, force_x, force_y, force_z, vibration_x, vibration_y, vibration_z, acoustic_emission_rms, tool_wear, ACTION_CODE
+	- SIT features: Time, Vib_Spindle, Vib_Table, Sound_Spindle, Sound_table, X_Load_Cell, Y_Load_Cell, Z_Load_Cell, Current and tool_wear
+- The agent is trained to output actions REPLACE_TOOL or CONTINUE. 
+- Optimize for maximum tool-life usage * WITHOUT * crossing WEAR_THRESHOLD.
+- Use R1, R2, R3 for reward/penalty parameters that can be passed to the environment.
+- Keep global variables for easy changes: DATA_FILE, Rewards R1, R2 and R3, WEAR_THRESHOLD (300), EPISODES (100), LR_DEFAULT (0.001), GAMMA_DEFAULT (0.99)
+- 'AutoRL': A function that trains 3 algorithms PPO, A2C and DQN, all based on the standard Stable-Baselines3 library
+- AutoRL should identify the best agent based on four criteria:
+	1. Lowest average "Wear margin" i.e. difference between WEAR_THRESHOLD and actual threshold when the tool was replaced (lowest best)
+	2. Avg. episode reward (max best)
+	3. Avg. threshold violations per episode (lower best). Threshold violations indicate tool-wear crossed a VIOLATION_THRESHOLD (default to 10% over WEAR_THRESHOLD)
+	4. Avg. replacements made per episode (lower best)
+
+- It is important to give user feedback on what is happening using ** live ** training plots
+
+## LIVE TRAINING plots in the right pane
+	- For every algo. + hyper-param. setting show a heading 
+	- While training the right pane should show **live** training with four plots showing the four criteria mentioned above
+	- Smoothen the plots using SMOOTH_WINDOW global parameter (10 episodes or 10% of RL time-steps whichever is higher).
+	- When the training is done, store the avg. metrics for comparing later
+	- Wipe out the plots, before starting the next algo/hyper-param combination
+
+- 'Compare Agents' function:
+	- Shows a table of all combinations and the four metrics
+	- Display a SUPERIMPOSED plot for all four plots
+	- At the top show a multi-check box list of all combinations - initially select all
+	- Provide a 'Apply' button, so if user deselects some, he can apply them
+
+- Once training is done - ensure the plots (or data) are 'stored' in a collapsable section 'Training Logs' - visible in right pane when we click 
+
+
+# Part B: UI (app.py): 
+- 'Dark' theme, deep/dark blues, light grey/yellow for texts
+
+## LEFT panel design:
+- Left panel: Two sections 'Agent training' and 'Agent evaluation'.
+- Section 'Agent training': 
+	- File loader for the sensor file. 
+	- 'Episodes' default=100
+	- Hyperparameters Learning rate (LR), Gamma: Allow entering arrays for grid-search - format [0.01, 0.001, 0.0003]
+	- Should work with None (then take default) or single array setting (eg. [0.001])
+- Buttons: 'AutoRL' and 'Compare Agents' button
+
+## RIGHT PANE:
+- Show the four metrics in four plots - LIVE plotting
+- Smoothen the plots using SMOOTH_WINDOW parameter.
+
