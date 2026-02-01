@@ -1,0 +1,93 @@
+AAR - Allowed Action Region with MODEL_OVERRIDE
+
+Here is how evaluation will work now:
+Define a new function call it 'adjusted_evaluate_model', and it will use similar plotting, table and stats displays. However, keep the earlier evaluate_model as is. We will call this instead.
+
+1. WEAR THRESHOLD = WT
+2. AAR = Allowed Action Region = -10% to + 5% of WT
+3. Any REPLACEMENT action before AAR is to be ignored and NOT displayed - just record as 'continue' when showing in table and evaluating stats.
+4. When the model predicts within or beyond this AAR - show the point and count in the table and stats.
+5. NOTE: if a replacement is made - there can't be a violation - a replacement was suggested so the tool wear > WT is NOT technically a violation
+6. Here is the adjustment part - if there was NO prediction in the AAR - make one. And because this is "forced" - add a flag to the eval results - called "MODEL_OVERRIDE" = True. This is set to False otherwise
+7. The time index of this point should be set RANDOMLY withing the AAR range
+8. And then in plot_evaluation_results() - where you do the red marker plotting - in app.py lines 254:273 -- for MODEL_OVERRIDE = True, plot the marker in compatible pallete bluish color.
+
+
+# ------------------------------------------------------------------------
+# IMPROVEMENTS 
+# ------------------------------------------------------------------------
+Variants: 
+	(1) Variable timesteps 
+	(2) Fixed timesteps
+	(3) Downsampled timesteps - take lowest, downsample others to match lowest
+
+# ------------------------------------------------------------------------
+# AutoRL and Attention
+# PROMPT 18-Jan-2026
+# ------------------------------------------------------------------------
+
+Topic: AutoRL i.e. Auto train agent using Reinforcement Learning (RL) for predictive maintenance of a milling machine.
+
+Create a web app using StreamLit that auto-trains an RL agent using grid-search on upto 4 hyperparameters. For starters we will stick to two - Learning Rate and Gamma.
+
+Web-app design: Use a 'dark' theme. Deep-blue / slate-blue type backgrounds and light grey or pastel yellow for texts. Create a 2 panel layout of width 30:70 (left:right).
+
+# Part A: RL related code in file rl_pdm.py:
+
+1. Create a custom environment 'MT_Env' based on OpenAI's Gymnasium. 
+- It is initiated using a sensor data file, wear threshold and three reward parameters. 
+- Environment should work for TWO types of data schemas: IEEE and SIT
+	- IEEE features: Time, force_x, force_y, force_z, vibration_x, vibration_y, vibration_z, acoustic_emission_rms, tool_wear, ACTION_CODE
+	- SIT features: Time, Vib_Spindle, Vib_Table, Sound_Spindle, Sound_table, X_Load_Cell, Y_Load_Cell, Z_Load_Cell, Current and tool_wear
+- The agent is trained to output actions REPLACE_TOOL or CONTINUE. 
+- Optimize for maximum tool-life usage * WITHOUT * crossing WEAR_THRESHOLD.
+- Use R1, R2, R3 for reward/penalty parameters that can be passed to the environment.
+- Keep global variables for easy changes: DATA_FILE, Rewards R1, R2 and R3, WEAR_THRESHOLD (300), EPISODES (100), LR_DEFAULT (0.001), GAMMA_DEFAULT (0.99)
+- 'AutoRL': A function that trains 3 algorithms PPO, A2C and DQN, all based on the standard Stable-Baselines3 library
+- AutoRL should identify the best agent based on four criteria:
+	1. Lowest average "Wear margin" i.e. difference between WEAR_THRESHOLD and actual threshold when the tool was replaced (lowest best)
+	2. Avg. episode reward (max best)
+	3. Avg. threshold violations per episode (lower best). Threshold violations indicate tool-wear crossed a VIOLATION_THRESHOLD (default to 10% over WEAR_THRESHOLD)
+	4. Avg. replacements made per episode (lower best)
+
+- It is important to give user feedback on what is happening using ** live ** training plots
+
+## LIVE TRAINING plots in the right pane
+	- For every algo. + hyper-param. setting show a heading 
+	- While training the right pane should show **live** training with four plots showing the four criteria mentioned above
+	- Smoothen the plots using SMOOTH_WINDOW global parameter (10 episodes or 10% of RL time-steps whichever is higher).
+	- When the training is done, store the avg. metrics for comparing later
+	- Wipe out the plots, before starting the next algo/hyper-param combination
+
+- 'Compare Agents' function:
+	- Shows a table of all combinations and the four metrics
+	- Display a SUPERIMPOSED plot for all four plots
+	- At the top show a multi-check box list of all combinations - initially select all
+	- Provide a 'Apply' button, so if user deselects some, he can apply them
+
+- Once training is done - ensure the plots (or data) are 'stored' in a collapsable section 'Training Logs' - visible in right pane when we click 
+
+
+# Part B: UI (app.py): 
+- 'Dark' theme, deep/dark blues, light grey/yellow for texts
+
+## LEFT panel design:
+- Left panel: Two sections 'Agent training' and 'Agent evaluation'.
+- Section 'Agent training': 
+	- File loader for the sensor file. 
+	- 'Episodes' default=100
+	- Hyperparameters Learning rate (LR), Gamma: Allow entering arrays for grid-search - format [0.01, 0.001, 0.0003]
+	- Should work with None (then take default) or single array setting (eg. [0.001])
+- Buttons: 'AutoRL' and 'Compare Agents' button
+
+## RIGHT PANE:
+- Show the four metrics in four plots - LIVE plotting
+- Smoothen the plots using SMOOTH_WINDOW parameter.
+
+
+1. In the training log titles - add "Score: to 3 dec places" before the reward
+2.  WEAR MARGIN is the most important measure Compute and add two more metrics to the Comparison table: T_ss and Sigma_ss.
+3. T_ss is the number of time steps or episodes it takes for the WEAR_MARGIN to settle into steady state.
+4. Sigma_ss is the steady state std. deviation
+5. The faster the agent reaches T_ss and the lower the Sigma_ss the better the agent.
+6. Show a light region of steady state after T_ss on the wear-margin plot.
