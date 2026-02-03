@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------------------
 # AutoRL: Auto-train Predictive Maintenance Agents 
-# 01-Feb-2026: A.E.Adjusted eval. Model override handling.
+# 03-Feb-2026: Wear thresholds
 # ---------------------------------------------------------------------------------------
 
 import gymnasium as gym
@@ -23,7 +23,15 @@ from datetime import datetime
 
 # --- GLOBAL VARIABLES ---
 DATA_FILE = "dummy_sensor_data.csv" # Default, will be overwritten
-WEAR_THRESHOLD = 300
+
+# WEAR_THRESHOLD: ISO recommended standard (constant, used for all plots and displays)
+WEAR_THRESHOLD = 300.00
+
+# TRAINING_WEAR_THRESHOLD: Configurable threshold for agent training
+# Should be <= WEAR_THRESHOLD so agent learns to replace earlier
+# Set from configuration page or defaults to WEAR_THRESHOLD
+TRAINING_WEAR_THRESHOLD = 300.00
+
 EPISODES = 100
 LR_DEFAULT = 0.001
 GAMMA_DEFAULT = 0.99
@@ -51,7 +59,7 @@ R2 = -100.0    # CATASTROPHIC penalty for violations - forces learning
 R3 = -0.5      # Replacement cost - makes replacement a deliberate choice
 R4 = 60.0      # Strong bonus for optimal replacement (increased from 50)
 
-print(f"RL module loaded: Fixed length: {FIXED_X_AXIS_LENGTH}, R1: {R1}, R2: {R2}, R3: {R3}, R4: {R4}")
+print(f"RL module loaded: Fixed length: {FIXED_X_AXIS_LENGTH}, WEAR_THRESHOLD: {WEAR_THRESHOLD}, TRAINING_WEAR_THRESHOLD: {TRAINING_WEAR_THRESHOLD}, R1: {R1}, R2: {R2}, R3: {R3}, R4: {R4}")
 
 class MT_Env(gym.Env):
     """
@@ -835,9 +843,9 @@ def train_single_model(data_file, algo_name, lr, gm, callback_func, attention_ty
     combo_name = f"{algo_name}{att_suffix} | LR={lr} | G={gm}"
     print(f"Training {combo_name}...")
     
-    # Create Env
+    # Create Env with TRAINING_WEAR_THRESHOLD for reward mechanism
     # We wrap in DummyVecEnv for SB3
-    env = DummyVecEnv([lambda: MT_Env(data_file, WEAR_THRESHOLD, R1, R2, R3, R4)])
+    env = DummyVecEnv([lambda: MT_Env(data_file, TRAINING_WEAR_THRESHOLD, R1, R2, R3, R4)])
     
     # Policy kwargs - map attention type to extractor class
     policy_kwargs = {}
@@ -1093,7 +1101,7 @@ def get_available_models():
     return sorted(models)
 
 
-def evaluate_model(model_path, data_file, wear_threshold=300):
+def evaluate_model(model_path, data_file, wear_threshold=None):
     """
     Evaluate a trained model on test data.
     
@@ -1101,17 +1109,22 @@ def evaluate_model(model_path, data_file, wear_threshold=300):
     regardless of whether the tool exceeds the threshold. This is different from
     training episodes which terminate early.
     
+    Uses WEAR_THRESHOLD (ISO standard) for display and violation detection.
+    
     Returns:
     {
         'timesteps': [list of timesteps],
         'tool_wear': [list of tool wear values],
         'actions': [list of actions taken (0 or 1)],
-        'wear_threshold': wear_threshold value,
+        'wear_threshold': WEAR_THRESHOLD value,
         'total_replacements': number of replacements,
-        'threshold_violations': number of times threshold was exceeded
+        'threshold_violations': number of times WEAR_THRESHOLD was exceeded
     }
     """
     try:
+        # Use WEAR_THRESHOLD (ISO standard) for evaluation
+        eval_wear_threshold = WEAR_THRESHOLD
+        
         # Determine algo from model filename
         model_name = os.path.basename(model_path)
         algo_name = model_name.split('_')[0]  # Extract algo (PPO, A2C, or DQN)
@@ -1131,8 +1144,8 @@ def evaluate_model(model_path, data_file, wear_threshold=300):
         data = pd.read_csv(data_file)
         
         # Create environment just for feature extraction and observation building
-        # Note: R4 will use default value from __init__
-        env = MT_Env(data_file, wear_threshold)
+        # Use TRAINING_WEAR_THRESHOLD for feature extraction
+        env = MT_Env(data_file, TRAINING_WEAR_THRESHOLD)
         
         # Validate observation shape
         expected_shape = model.observation_space.shape[0]
@@ -1171,7 +1184,7 @@ def evaluate_model(model_path, data_file, wear_threshold=300):
                 if action == 0:  # REPLACE
                     total_replacements += 1
                 
-                if current_wear > wear_threshold:
+                if current_wear > eval_wear_threshold:
                     threshold_violations += 1
                     
             except Exception as e:
@@ -1181,7 +1194,7 @@ def evaluate_model(model_path, data_file, wear_threshold=300):
             'timesteps': timesteps,
             'tool_wear': tool_wear_values,
             'actions': actions_taken,
-            'wear_threshold': wear_threshold,
+            'wear_threshold': eval_wear_threshold,
             'total_replacements': total_replacements,
             'threshold_violations': threshold_violations
         }
@@ -1191,26 +1204,27 @@ def evaluate_model(model_path, data_file, wear_threshold=300):
         raise Exception(f"Evaluation failed: {str(e)}")
 
 
-def adjusted_evaluate_model(model_path, data_file, wear_threshold=300):
+def adjusted_evaluate_model(model_path, data_file, wear_threshold=None):
     """
     Adjusted evaluation with Allowed Action Region (AAR) logic.
     
-    AAR (Allowed Action Region) = [0.9 * WT, 1.05 * WT]
+    Uses WEAR_THRESHOLD (ISO standard) for evaluation and display.
+    AAR (Allowed Action Region) = [0.9 * WEAR_THRESHOLD, 1.05 * WEAR_THRESHOLD]
     
     Logic:
     1. Any REPLACEMENT before AAR is ignored (recorded as CONTINUE in display)
     2. Replacements within/beyond AAR are counted and displayed
     3. If replacement is made, no violation (replacement was suggested)
-    4. If NO valid replacement in AAR found, force one at first AAR point (MODEL_OVERRIDE = True)
+    4. If NO valid replacement in AAR found, force one at random point (MODEL_OVERRIDE = True)
     
     Returns:
     {
         'timesteps': [list of timesteps],
         'tool_wear': [list of tool wear values],
         'actions': [list of adjusted actions (0 or 1)],
-        'wear_threshold': wear_threshold value,
+        'wear_threshold': WEAR_THRESHOLD value (ISO standard),
         'total_replacements': number of valid replacements,
-        'threshold_violations': number of violations (wear > WT with no replacement),
+        'threshold_violations': number of violations (wear > WEAR_THRESHOLD with no replacement),
         'model_override': bool - True if forced replacement was added,
         'override_timestep': timestep where override occurred (None if no override)
     }
@@ -1218,6 +1232,9 @@ def adjusted_evaluate_model(model_path, data_file, wear_threshold=300):
     try:
         # Load data from file
         data = pd.read_csv(data_file)
+        
+        # Use WEAR_THRESHOLD (ISO standard) for evaluation
+        eval_wear_threshold = WEAR_THRESHOLD
         
         # Determine algo from model filename
         model_name = os.path.basename(model_path)
@@ -1233,12 +1250,12 @@ def adjusted_evaluate_model(model_path, data_file, wear_threshold=300):
         AlgoClass = algos.get(algo_name, A2C)
         model = AlgoClass.load(model_path)
         
-        # Create environment for feature extraction
-        env = MT_Env(data_file, wear_threshold)
+        # Create environment for feature extraction (use TRAINING_WEAR_THRESHOLD)
+        env = MT_Env(data_file, TRAINING_WEAR_THRESHOLD)
         
-        # Define AAR bounds with realistic random variation
-        aar_lower = 0.9 * wear_threshold + np.random.uniform(0.0, 1.0)
-        aar_upper = 1.05 * wear_threshold + np.random.uniform(0.0, 1.0)
+        # Define AAR bounds with realistic random variation (based on ISO standard)
+        aar_lower = 0.9 * eval_wear_threshold + np.random.uniform(0.0, 1.0)
+        aar_upper = 1.05 * eval_wear_threshold + np.random.uniform(0.0, 1.0)
         
         # Track evaluation data
         timesteps = []
@@ -1282,8 +1299,8 @@ def adjusted_evaluate_model(model_path, data_file, wear_threshold=300):
                         total_replacements += 1
                         adjusted_action = 0
                 else:  # action == 1 (CONTINUE)
-                    # Check for violations (wear > WT without replacement)
-                    if current_wear > wear_threshold:
+                    # Check for violations (wear > WEAR_THRESHOLD without replacement)
+                    if current_wear > eval_wear_threshold:
                         threshold_violations += 1
                 
                 # Store adjusted data
@@ -1323,7 +1340,7 @@ def adjusted_evaluate_model(model_path, data_file, wear_threshold=300):
             'timesteps': timesteps,
             'tool_wear': tool_wear_values,
             'actions': actions_taken,
-            'wear_threshold': wear_threshold,
+            'wear_threshold': eval_wear_threshold,
             'total_replacements': total_replacements,
             'threshold_violations': threshold_violations,
             'model_override': model_override,
@@ -1336,16 +1353,19 @@ def adjusted_evaluate_model(model_path, data_file, wear_threshold=300):
         raise Exception(f"Adjusted evaluation failed: {str(e)}")
 
 
-def plot_sensor_data(data_file, wear_threshold=300):
+def plot_sensor_data(data_file, wear_threshold=None):
     """
     Plots sensor data based on the detected schema (IEEE or SIT).
     
     For the tool_wear plot, displays as dual-axis chart:
     - Left axis (yellow): Tool Wear values (0-320 range)
-    - Dotted red line: Wear Threshold (horizontal)
+    - Dotted red line: Wear Threshold (horizontal) - uses WEAR_THRESHOLD constant
     - Right axis (blue): ACTION_CODE (0-1 range)
     """
     try:
+        # Use WEAR_THRESHOLD constant for display (ISO standard)
+        display_threshold = WEAR_THRESHOLD
+        
         # Load Data
         data = pd.read_csv(data_file)
         columns = data.columns
@@ -1405,8 +1425,8 @@ def plot_sensor_data(data_file, wear_threshold=300):
                 )
                 
                 # Add wear threshold as dotted red horizontal line on primary y-axis
-                fig.add_hline(y=wear_threshold, line_dash="dot", line_color="red",
-                              annotation_text="Wear Threshold", row=row, col=col, secondary_y=False)
+                fig.add_hline(y=display_threshold, line_dash="dot", line_color="red",
+                              annotation_text=f"Wear Threshold ({display_threshold})", row=row, col=col, secondary_y=False)
                 
                 # Add ACTION_CODE as blue line on secondary y-axis if available
                 if 'ACTION_CODE' in columns:

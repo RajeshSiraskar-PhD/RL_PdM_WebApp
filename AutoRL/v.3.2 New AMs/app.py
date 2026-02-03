@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------------------
 # AutoRL: Auto-train Predictive Maintenance Agents 
-# 01-Feb-2026: A.E.Adjusted eval. Model override handling.
+# 03-Feb-2026: Wear thresholds
 # ---------------------------------------------------------------------------------------
 
 import streamlit as st
@@ -28,13 +28,13 @@ st.markdown("""
         background-color: #2D2D44;
     }
     
-    /* Texts title: #f5a55b*/
+    /* Texts title: #f5a55b labels #95b8d1 */
     h1 {
-        color: #f5a55b !important;
+        color: #32a6a8 !important;
     }
 
     h2, h3, p, label {
-        color: #95b8d1 !important;
+        color: #2e9294 !important;
     }
     
     /* Inputs */
@@ -51,17 +51,23 @@ st.markdown("""
         color: #F5E0B5;
     }
     
-    /* Buttons #2196F3 hover: #1976D2 ##313e85*/
+    /* Buttons #2196F3 hover: #1976D2 ##313e85 #1111d9*/
     .stButton>button {
         background-color: #0660ba; 
-        color: white !important;
+        color: #FFFFFF !important;
         border-radius: 5px;
         border: none;
         transition: background-color 0.3s ease;
+        font-weight: bold !important;
+        font-size: 14px !important;
+    }
+    
+    .stButton>button p, .stButton>button span {
+        color: #FFFFFF !important;
     }
     .stButton>button:hover {
-        background-color: #1111d9;
-        color: white !important;
+        background-color: #1c04b8;
+        color: #b0e7e8 !important;
     }
     
     /* Metrics/Plots Background */
@@ -340,7 +346,7 @@ def plot_evaluation_results(eval_results, model_name):
 
 # --- LAYOUT --- # $$$
 st.title(f'AutoRL: Auto-train PdM Agents. AE') 
-st.markdown(' - V.3.2: New AMs')
+st.markdown(' - V.3.22: Real and Training Wear thresholds.')
 
 col1, col2 = st.columns([1.7, 8.3])
 
@@ -470,7 +476,7 @@ with col1:
         
         # AutoRL Button
         start_training = st.button("AutoRL - Auto train")
-        st.subheader("Attention mechanism: Nadaraya-Watson & Deep-Learning")
+        st.subheader("Attention Awareness")
         apply_attention = st.button("Apply Attention")
         # Separator
         st.markdown("---")
