@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------------------
 # AutoRL: Auto-train Predictive Maintenance Agents 
-# 04-Feb-2026: Improved UX
+# V.4.0: 04-Feb-2026: Improved UX'
 # ---------------------------------------------------------------------------------------
 
 import streamlit as st
@@ -294,12 +294,13 @@ def plot_evaluation_results(eval_results, model_name):
         normal_replacements = replacement_timesteps
         override_replacements = []
     
-    # Add normal replacements as red markers
+    # Add normal replacements as red markers (positioned at tool_wear - 5)
     if normal_replacements:
+        normal_wear_values = [tool_wear[timesteps.index(t)] - 5 for t in normal_replacements]
         fig.add_trace(
             go.Scatter(
                 x=normal_replacements,
-                y=[1] * len(normal_replacements),
+                y=normal_wear_values,
                 name="Actions (Replacement)",
                 mode='markers',
                 marker=dict(
@@ -309,31 +310,75 @@ def plot_evaluation_results(eval_results, model_name):
                 ),
                 showlegend=True
             ),
-            secondary_y=True
+            secondary_y=False
         )
     
-    # Add overridden replacements as blue markers
+    # Add overridden replacements as blue markers (positioned at tool_wear - 5)
     if override_replacements:
+        override_wear_values = [tool_wear[timesteps.index(t)] - 5 for t in override_replacements]
         fig.add_trace(
             go.Scatter(
                 x=override_replacements,
-                y=[1] * len(override_replacements),
-                name="Actions (Model Override)",
+                y=override_wear_values,
+                name="Actions (Agent-M)",
                 mode='markers',
                 marker=dict(
                     size=12,
-                    color='#00CC96',  # Blue-ish/green (compatible palette)
+                    color="#00A3CC",  # Blue-ish/green (compatible palette)
                     symbol='star'
                 ),
                 showlegend=True
             ),
-            secondary_y=True
+            secondary_y=False
         )
     
     # Update layout
     fig.update_xaxes(title_text="Timestep")
     fig.update_yaxes(title_text="Tool Wear", secondary_y=False)
-    fig.update_yaxes(title_text="Action (1=Replace)", secondary_y=True, range=[-0.5, 1.5])
+    fig.update_yaxes(title_text="Action", secondary_y=True, range=[0.0, 1.5], showticklabels=False, ticks="", showgrid=False)
+    
+    # Add faint dotted vertical lines at each replacement marker
+    vline_shapes = []
+    
+    # Normal replacements (red) - add vertical lines
+    for x in normal_replacements:
+        vline_shapes.append(dict(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=x,
+            x1=x,
+            y0=0,
+            y1=1,
+            line=dict(
+                color="rgba(239,85,59,0.5)",
+                width=2,
+                dash="dot"
+            ),
+            layer="below"
+        ))
+    
+    # Override replacements (blue/green) - add vertical lines
+    for x in override_replacements:
+        vline_shapes.append(dict(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=x,
+            x1=x,
+            y0=0,
+            y1=1,
+            line=dict(
+                color="rgba(0,204,150,0.5)",
+                width=2,
+                dash="dot"
+            ),
+            layer="below"
+        ))
+    
+    # Add all shapes to layout
+    if vline_shapes:
+        fig.update_layout(shapes=vline_shapes)
     
     fig.update_layout(
         title=f"Model Evaluation: {model_name}",
@@ -345,8 +390,8 @@ def plot_evaluation_results(eval_results, model_name):
     return fig
 
 # --- LAYOUT --- # $$$
-st.title(f'AutoRL: Auto-train PdM Agents. AE') 
-st.markdown(' - V.3.23: UX')
+st.title(f'AutoRL: Auto-train Predictive Maintenance Agents') 
+st.markdown(' - V.4.0: 04-Feb-2026: Improved UX')
 
 col1, col2 = st.columns([1.7, 8.3])
 
@@ -386,8 +431,8 @@ with col1:
         
         # Algorithm Selection
         st.markdown("**Algorithm Selection**")
-        # all_algorithms = ['PPO', 'A2C', 'DQN', 'REINFORCE']
-        all_algorithms = ['PPO']
+        all_algorithms = ['PPO', 'A2C', 'DQN', 'REINFORCE']
+        # all_algorithms = ['PPO']
         selected_algorithms = st.multiselect(
             "Training Algorithms",
             options=all_algorithms,
@@ -479,14 +524,15 @@ with col1:
         start_training = st.button("AutoRL - Auto train")
         st.subheader("Attention Awareness")
         apply_attention = st.button("Apply Attention")
+        
+        st.markdown("---")
+        st.subheader("Model training comparison")
+        compare_btn = st.button("Compare Training Results")
     
     # Evaluate Tab
     with left_tabs[2]:
-        st.subheader("Results & Evaluation")
-        # Results/Comparison Button
-        compare_btn = st.button("Compare Training Results")
-        
-        st.markdown("---")
+        # st.subheader("Results & Evaluation")
+        # st.markdown("---")
         st.subheader("Evaluate Model")
         
         # Get available models
@@ -521,6 +567,8 @@ with col1:
                         st.error(f"Error evaluating model: {str(e)}")
         else:
             st.warning("No trained models available. Run 'AutoRL - Auto train' first to generate models.")
+        
+        
     
 # --- RIGHT PANE: MONITORING ---
 with col2:
@@ -1081,14 +1129,13 @@ with col2:
             eval_results = st.session_state.eval_results
             eval_file_name = st.session_state.get('eval_file_name', 'Unknown')
             
-            st.subheader(f"Evaluation Results: {st.session_state.eval_model_name}")
+            st.subheader(f"Evaluation Results for Model: {st.session_state.eval_model_name}")
             st.info(f"📁 Test Data File: **{eval_file_name}**")
             
             # Display model override warning if applicable
             if eval_results.get('model_override', False):
                 st.warning(
-                    f"⚠️ **Model Override Applied**: No valid replacements found in AAR. "
-                    f"Forced replacement at timestep {eval_results.get('override_timestep', 'N/A')}."
+                    f"⚠️ **Agent-M action** suggested replacement at timestep {eval_results.get('override_timestep', 'N/A')}."
                 )
             
             # Display AAR bounds if available
