@@ -1,20 +1,24 @@
 # ---------------------------------------------------------------------------------------
 # AutoRL: Auto-train Predictive Maintenance Agents 
-# V.4.1: 04-Feb-2026: Improved model scoring
+# Author: Rajesh Siraskar
+# RL for PdM code
+# V.1.0: 06-Feb-2026: First commit
 # ---------------------------------------------------------------------------------------
+
+import pandas as pd
+import numpy as np
+from typing import Any, Dict, Optional, Type, Union, TypeVar
 
 import gymnasium as gym
 from gymnasium import spaces
-import pandas as pd
-import numpy as np
 from stable_baselines3 import PPO, A2C, DQN
-# from reinforce_sb3 import REINFORCE
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 import os
 import torch as th
 import torch.nn as nn
+from torch.nn import functional as F
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -948,7 +952,7 @@ def train_single_model(data_file, algo_name, lr, gm, callback_func, attention_ty
             file_path = data_file
             training_filename = Path(file_path).stem
 
-        ep_str = f"{EPISODES:03d}"  # Episodes as 3-digit (e.g., 100, 200)
+        ep_str = f"{EPISODES}"  # Episodes as 3-digit (e.g., 100, 200)
         lr_str = f"{lr:.0e}" if lr < 1 else f"{lr:.2f}".replace(".", "")  # Scientific notation for small LR
         gm_str = f"{int(gm * 100):02d}"
         
@@ -1250,6 +1254,9 @@ def adjusted_evaluate_model(model_path, data_file, wear_threshold=None):
         # Lambda (λ): Difference in timesteps between first replacement and first threshold crossing
         t_FR = next((i for i, a in enumerate(actions_taken) if a == 0), None)
         T_wt = next((i for i, w in enumerate(tool_wear_values) if w > eval_wear_threshold), None)
+        # print(f"t_FR: {t_FR}, T_wt: {T_wt}")
+        # T_wt = int((1.0-IAR_RANGE)*T_wt)    # Safe to change tool before 95 % of T_wt
+
         lambda_metric = None
         tool_usage_pct = None
         if t_FR is not None and T_wt is not None:
@@ -1622,118 +1629,118 @@ class REINFORCE(OnPolicyAlgorithm):
 
 
 
-def evaluate_model(model_path, data_file, wear_threshold=None):
-    """
-    Evaluate a trained model on test data.
+# def evaluate_model(model_path, data_file, wear_threshold=None):
+#     """
+#     Evaluate a trained model on test data.
     
-    NOTE: This is a HISTORICAL REPLAY evaluation - we process all data points
-    regardless of whether the tool exceeds the threshold. This is different from
-    training episodes which terminate early.
+#     NOTE: This is a HISTORICAL REPLAY evaluation - we process all data points
+#     regardless of whether the tool exceeds the threshold. This is different from
+#     training episodes which terminate early.
     
-    Uses WEAR_THRESHOLD (ISO standard) for display and violation detection.
+#     Uses WEAR_THRESHOLD (ISO standard) for display and violation detection.
     
-    Returns:
-    {
-        'timesteps': [list of timesteps],
-        'tool_wear': [list of tool wear values],
-        'actions': [list of actions taken (0 or 1)],
-        'wear_threshold': WEAR_THRESHOLD value,
-        'total_replacements': number of replacements,
-        'threshold_violations': number of times WEAR_THRESHOLD was exceeded
-    }
-    """
-    try:
-        # Use WEAR_THRESHOLD (ISO standard) for evaluation
-        eval_wear_threshold = WEAR_THRESHOLD
+#     Returns:
+#     {
+#         'timesteps': [list of timesteps],
+#         'tool_wear': [list of tool wear values],
+#         'actions': [list of actions taken (0 or 1)],
+#         'wear_threshold': WEAR_THRESHOLD value,
+#         'total_replacements': number of replacements,
+#         'threshold_violations': number of times WEAR_THRESHOLD was exceeded
+#     }
+#     """
+#     try:
+#         # Use WEAR_THRESHOLD (ISO standard) for evaluation
+#         eval_wear_threshold = WEAR_THRESHOLD
         
-        # Determine algo from model filename
-        model_name = os.path.basename(model_path)
-        algo_name = model_name.split('_')[0]  # Extract algo (PPO, A2C, or DQN)
+#         # Determine algo from model filename
+#         model_name = os.path.basename(model_path)
+#         algo_name = model_name.split('_')[0]  # Extract algo (PPO, A2C, or DQN)
         
-        # Load model
-        algos = {
-            'PPO': PPO,
-            'A2C': A2C,
-            'DQN': DQN,
-            'REINFORCE': REINFORCE
-        }
+#         # Load model
+#         algos = {
+#             'PPO': PPO,
+#             'A2C': A2C,
+#             'DQN': DQN,
+#             'REINFORCE': REINFORCE
+#         }
         
-        AlgoClass = algos.get(algo_name, A2C)
-        model = AlgoClass.load(model_path)
+#         AlgoClass = algos.get(algo_name, A2C)
+#         model = AlgoClass.load(model_path)
         
-        # Load data directly for evaluation (not wrapped in environment)
-        data = pd.read_csv(data_file)
+#         # Load data directly for evaluation (not wrapped in environment)
+#         data = pd.read_csv(data_file)
         
-        # Create environment just for feature extraction and observation building
-        # Use TRAINING_WEAR_THRESHOLD for feature extraction
-        env = MT_Env(data_file, TRAINING_WEAR_THRESHOLD)
+#         # Create environment just for feature extraction and observation building
+#         # Use TRAINING_WEAR_THRESHOLD for feature extraction
+#         env = MT_Env(data_file, TRAINING_WEAR_THRESHOLD)
         
-        # Validate observation shape
-        expected_shape = model.observation_space.shape[0]
+#         # Validate observation shape
+#         expected_shape = model.observation_space.shape[0]
         
-        # Track evaluation data
-        timesteps = []
-        tool_wear_values = []
-        actions_taken = []
-        total_replacements = 0
-        threshold_violations = 0
+#         # Track evaluation data
+#         timesteps = []
+#         tool_wear_values = []
+#         actions_taken = []
+#         total_replacements = 0
+#         threshold_violations = 0
         
-        # Process all data points (historical replay - no early termination)
-        for timestep, idx in enumerate(range(len(data))):
-            try:
-                # Get the observation for this row
-                obs = data.iloc[idx][env.features].values.astype(np.float32)
+#         # Process all data points (historical replay - no early termination)
+#         for timestep, idx in enumerate(range(len(data))):
+#             try:
+#                 # Get the observation for this row
+#                 obs = data.iloc[idx][env.features].values.astype(np.float32)
                 
-                # Validate shape
-                if len(obs) != expected_shape:
-                    raise ValueError(
-                        f"Feature mismatch at row {idx}! Expected {expected_shape} features but got {len(obs)}.\n"
-                        f"Features: {env.features}\n"
-                        f"Data shape: {data.shape}"
-                    )
+#                 # Validate shape
+#                 if len(obs) != expected_shape:
+#                     raise ValueError(
+#                         f"Feature mismatch at row {idx}! Expected {expected_shape} features but got {len(obs)}.\n"
+#                         f"Features: {env.features}\n"
+#                         f"Data shape: {data.shape}"
+#                     )
                 
-                # Get action from model
-                action, _ = model.predict(obs, deterministic=True)
+#                 # Get action from model
+#                 action, _ = model.predict(obs, deterministic=True)
                 
-                # Store data
-                current_wear = data.iloc[idx]['tool_wear']
-                timesteps.append(timestep)
-                tool_wear_values.append(float(current_wear))
-                actions_taken.append(int(action))
+#                 # Store data
+#                 current_wear = data.iloc[idx]['tool_wear']
+#                 timesteps.append(timestep)
+#                 tool_wear_values.append(float(current_wear))
+#                 actions_taken.append(int(action))
                 
-                # Track metrics
-                if action == 0:  # REPLACE
-                    total_replacements += 1
+#                 # Track metrics
+#                 if action == 0:  # REPLACE
+#                     total_replacements += 1
                 
-                if (current_wear > eval_wear_threshold) and (total_replacements == 0):
-                    threshold_violations += 1
+#                 if (current_wear > eval_wear_threshold) and (total_replacements == 0):
+#                     threshold_violations += 1
                     
-            except Exception as e:
-                raise Exception(f"Error processing row {idx}: {str(e)}")
+#             except Exception as e:
+#                 raise Exception(f"Error processing row {idx}: {str(e)}")
         
-        # Lambda (λ): Difference in timesteps between first replacement and first threshold crossing
-        t_FR = next((i for i, a in enumerate(actions_taken) if a == 0), None)
-        T_wt = next((i for i, w in enumerate(tool_wear_values) if w > eval_wear_threshold), None)
-        lambda_metric = None
-        tool_usage_pct = None
-        if t_FR is not None and T_wt is not None:
-            lambda_metric = T_wt - t_FR
-            try:
-                tool_usage_pct = (t_FR / T_wt) if T_wt > 0 else None
-            except Exception:
-                tool_usage_pct = None
+#         # Lambda (λ): Difference in timesteps between first replacement and first threshold crossing
+#         t_FR = next((i for i, a in enumerate(actions_taken) if a == 0), None)
+#         T_wt = next((i for i, w in enumerate(tool_wear_values) if w > eval_wear_threshold), None)
+#         lambda_metric = None
+#         tool_usage_pct = None
+#         if t_FR is not None and T_wt is not None:
+#             lambda_metric = T_wt - t_FR
+#             try:
+#                 tool_usage_pct = (t_FR / T_wt) if T_wt > 0 else None
+#             except Exception:
+#                 tool_usage_pct = None
 
-        return {
-            'timesteps': timesteps,
-            'tool_wear': tool_wear_values,
-            'actions': actions_taken,
-            'wear_threshold': eval_wear_threshold,
-            'T_wt': T_wt,
-            't_FR': t_FR,
-            'lambda': lambda_metric,
-            'tool_usage_pct': tool_usage_pct
-        }
+#         return {
+#             'timesteps': timesteps,
+#             'tool_wear': tool_wear_values,
+#             'actions': actions_taken,
+#             'wear_threshold': eval_wear_threshold,
+#             'T_wt': T_wt,
+#             't_FR': t_FR,
+#             'lambda': lambda_metric,
+#             'tool_usage_pct': tool_usage_pct
+#         }
     
-    except Exception as e:
-        # Re-raise with context
-        raise Exception(f"Evaluation failed: {str(e)}")
+#     except Exception as e:
+#         # Re-raise with context
+#         raise Exception(f"Evaluation failed: {str(e)}")

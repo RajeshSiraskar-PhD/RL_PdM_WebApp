@@ -1,6 +1,8 @@
 # ---------------------------------------------------------------------------------------
 # AutoRL: Auto-train Predictive Maintenance Agents 
-# V.4.1: 04-Feb-2026: Improved model scoring
+# Author: Rajesh Siraskar
+# Web-UX code
+# V.1.0: 06-Feb-2026: First commit
 # ---------------------------------------------------------------------------------------
 
 import streamlit as st
@@ -10,6 +12,7 @@ import os
 import rl_pdm # Import our backend
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import datetime
 
 # --- CONFIG ---
 st.set_page_config(page_title="AutoRL - Predictive Maintenance", layout="wide")
@@ -254,11 +257,10 @@ def plot_evaluation_results(eval_results, model_name):
         secondary_y=False
     )
     
-    # Add IAR shaded region if available
-    if 'IAR_lower' in eval_results and 'IAR_upper' in eval_results:
-        IAR_lower = eval_results['IAR_lower']
-        IAR_upper = eval_results['IAR_upper']
-        
+    # Always attempt to plot IAR lines; warn if missing
+    IAR_lower = eval_results.get('IAR_lower', None)
+    IAR_upper = eval_results.get('IAR_upper', None)
+    if IAR_lower is not None and IAR_upper is not None:
         # Add lower and upper bounds
         fig.add_hline(
             y=IAR_lower,
@@ -278,6 +280,9 @@ def plot_evaluation_results(eval_results, model_name):
             annotation_position="right",
             secondary_y=False
         )
+    else:
+        import warnings
+        warnings.warn("IAR_lower and/or IAR_upper missing from eval_results. IAR lines will not be shown.")
     
     # Separate replacements into normal (red) and overridden (blue)
     model_override = eval_results.get('model_override', False)
@@ -306,7 +311,8 @@ def plot_evaluation_results(eval_results, model_name):
                 marker=dict(
                     size=12,
                     color='#EF553B',  # Red
-                    symbol='diamond'
+                    symbol='diamond',
+                    opacity=0.5
                 ),
                 showlegend=True
             ),
@@ -325,7 +331,8 @@ def plot_evaluation_results(eval_results, model_name):
                 marker=dict(
                     size=12,
                     color="#EF553B",  # Use 00A3CC Blue-ish for star replacement
-                    symbol='star'
+                    symbol='star',
+                    opacity=0.9
                 ),
                 showlegend=True
             ),
@@ -338,11 +345,10 @@ def plot_evaluation_results(eval_results, model_name):
     fig.update_yaxes(title_text="Action", secondary_y=True, range=[0.0, 1.5], showticklabels=False, ticks="", showgrid=False)
     
     # Add faint dotted vertical lines at each replacement marker
-    vline_shapes = []
     
     # Normal replacements (red) - add vertical lines
     for x in normal_replacements:
-        vline_shapes.append(dict(
+        fig.add_shape(
             type="line",
             xref="x",
             yref="paper",
@@ -351,16 +357,16 @@ def plot_evaluation_results(eval_results, model_name):
             y0=0,
             y1=1,
             line=dict(
-                color="rgba(239,85,59,0.2)",
-                width=1,
-                dash="dot"
+                color="rgba(239,85,59,0.1)",
+                width=0.3,
+                # dash="dot"
             ),
             layer="below"
-        ))
+        )
     
     # Override replacements (blue/green) - add vertical lines
     for x in override_replacements:
-        vline_shapes.append(dict(
+        fig.add_shape(
             type="line",
             xref="x",
             yref="paper",
@@ -374,11 +380,7 @@ def plot_evaluation_results(eval_results, model_name):
                 dash="dot"
             ),
             layer="below"
-        ))
-    
-    # Add all shapes to layout
-    if vline_shapes:
-        fig.update_layout(shapes=vline_shapes)
+        )
     
     fig.update_layout(
         title=f"Model Evaluation: {model_name}",
@@ -391,7 +393,7 @@ def plot_evaluation_results(eval_results, model_name):
 
 # --- LAYOUT --- # $$$
 st.title(f'AutoRL: Auto-train Predictive Maintenance Agents') 
-st.markdown(' - V.4.3: 06-Feb-2026: Improved UX')
+st.markdown(' - V.1.1: Add report')
 
 col1, col2 = st.columns([1.7, 8.3])
 
@@ -514,14 +516,14 @@ with col1:
         
         # Hyperparams Input
         st.subheader("Hyperparameters")
-        lr_input = st.text_input("Learning Rates (comma sep)", "0.001")
+        lr_input = st.text_input("Learning Rates (comma sep)", "0.0005")
         gamma_input = st.text_input("Gammas (comma sep)", "0.99")
         
         # Parse inputs
         try:
             lrs = [float(x.strip()) for x in lr_input.split(",")]
         except:
-            lrs = [0.001]
+            lrs = [0.0005]
             
         try:
             gammas = [float(x.strip()) for x in gamma_input.split(",")]
@@ -745,7 +747,7 @@ with col2:
                         t_ss = res.get('T_ss', None)
                         sigma_ss = res.get('Sigma_ss', None)
                         fig = plot_4_panel(res['full_metrics'], title, height=400, data_filename=filename, t_ss=t_ss, sigma_ss=sigma_ss)
-                        st.plotly_chart(fig, use_container_width=True, key=f"training_history_{res['Agent']}_{res['LR']}_{res['Gamma']}")
+                        st.plotly_chart(fig, use_container_width=True, key=f"training_history_{i}_{res['Agent']}_{res['LR']}_{res['Gamma']}")
 
     # --- TRAIN ATTENTION MODELS ONLY (Independent of AutoRL) ---
     if 'train_attention_only' in locals() and train_attention_only:
@@ -834,44 +836,102 @@ with col2:
                 st.rerun()
 
     # --- ATTENTION STEP --- Training Handler (Outside start_training block to survive rerun)
+    # --- ATTENTION STEP --- Training Handler (Outside start_training block to survive rerun)
     if 'apply_attention' in locals() and apply_attention:
-        # Check if results exist
-        if 'training_results' not in st.session_state or not st.session_state.training_results:
-             st.warning("Please run 'AutoRL - Auto train' first to generate base agents.")
+        # Check if file uploaded
+        if uploaded_file is None:
+            st.error("Please upload a CSV file first in the Training tab.")
         else:
             # Check if any attention mechanisms are selected
             selected_attention = st.session_state.get('attention_options', {})
             enabled_attention = [k for k, v in selected_attention.items() if v]
             
             if not enabled_attention:
-                st.warning("Please select at least one attention mechanism in the Configuration tab before applying attention.")
+                st.warning("Please select at least one attention mechanism in the Configuration tab.")
             else:
-                # Find Best Agent from Session State
-                valid_results = [r for r in st.session_state.training_results if 'error' not in r]
-                best_agent = None
-                best_reward = -float('inf')
+                # --- PHASE 1: BASE AGENT TRAINING ---
+                st.subheader("Phase 1: Training Base Agents")
                 
-                for res in valid_results:
-                    if res['Avg Reward'] > best_reward:
-                        best_reward = res['Avg Reward']
-                        best_agent = res
+                # specific containers for this run
+                phase1_container = st.container()
+                phase1_status = st.empty()
                 
-                if best_agent:
-                    st.info(f"Applying {len(enabled_attention)} Attention Mechanism(s) to Best Agent: **{best_agent['Agent']}**")
-                    st.caption(f"Selected: {', '.join(enabled_attention)}")
+                # Save file
+                data_path = save_uploaded_file(uploaded_file)
+                base_filename = st.session_state.get('data_filename', 'Unknown')
                 
-                # Prepare UI Callback
-                def ui_callback_att(combo_name, metrics):
-                    filename = st.session_state.get('data_filename', 'Unknown')
-                    fig = plot_4_panel(metrics, f"Training: {combo_name}", data_filename=filename)
+                # Clear previous results for a fresh start
+                st.session_state.training_results = []
+                
+                # Set Globals
+                rl_pdm.EPISODES = episodes
+                rl_pdm.WEAR_THRESHOLD = st.session_state.get('wear_threshold', 285)
+                
+                # Generate Base Tasks
+                base_tasks = []
+                algo_names = st.session_state.get('selected_algorithms', ['PPO', 'A2C', 'DQN', 'REINFORCE'])
+                for algo in algo_names:
+                    for lr in lrs:
+                        for gm in gammas:
+                            base_tasks.append({'algo': algo, 'lr': lr, 'gamma': gm, 'status': 'Pending'})
+                
+                # Define Callback
+                def ui_callback_phase1(combo_name, metrics):
+                    fig = plot_4_panel(metrics, f"Training: {combo_name}", data_filename=base_filename)
+                    # We can use the main placeholder or a specific one
                     plot_placeholder.plotly_chart(fig, use_container_width=True)
                 
-                # Data Path
-                data_path = "temp_sensor_data.csv" # Standard path
-                if not os.path.exists(data_path):
-                    st.error("Data file not found. Please upload again.")
+                # Render Status
+                def render_phase1_status():
+                    content = "**Phase 1 Queue:**\n\n"
+                    for t in base_tasks:
+                        icon = "⏳"
+                        if t['status'] == 'Running': icon = "🔄"
+                        elif t['status'] == 'Done': icon = "✅"
+                        elif t['status'] == 'Error': icon = "❌"
+                        content += f"{icon} **{t['algo']}** (LR={t['lr']}, γ={t['gamma']})\n\n"
+                    phase1_status.markdown(content)
+                
+                # Run Phase 1
+                for i, task in enumerate(base_tasks):
+                    task['status'] = 'Running'
+                    render_phase1_status()
+                    
+                    res = rl_pdm.train_single_model(
+                        data_path, task['algo'], task['lr'], task['gamma'], 
+                        ui_callback_phase1, data_filename=base_filename
+                    )
+                    st.session_state.training_results.append(res)
+                    
+                    if 'error' in res:
+                        task['status'] = 'Error'
+                    else:
+                        task['status'] = 'Done'
+                    render_phase1_status()
+                    
+                st.success("Phase 1 Complete!")
+                
+                # --- PHASE 2: SELECT BEST AGENT ---
+                # Find Best Agent from results
+                valid_results = [r for r in st.session_state.training_results if 'error' not in r]
+                best_agent = None
+                
+                if not valid_results:
+                    st.error("No valid base agents trained. Cannot proceed to attention.")
                 else:
-                    # Build Attention tasks based on selected options
+                    # Select best based on Weighted Score (or Avg Reward if desired)
+                    # Using Weighted Score as it is the primary metric
+                    best_agent = max(valid_results, key=lambda x: x.get('Weighted Score', -float('inf')))
+                    
+                    st.info(f"Phase 2: Best Agent Selected: **{best_agent['Agent']}** (Score: {best_agent['Weighted Score']:.3f})")
+                    
+                    # --- PHASE 3: APPLY ATTENTION ---
+                    st.subheader(f"Phase 3: Applying Attention to {best_agent['Agent']}")
+                    phase3_status = st.empty()
+                    
+                    st.caption(f"Selected Mechanisms: {', '.join(enabled_attention)}")
+                    
+                    # Define Attention Tasks
                     att_tasks = []
                     for att_type in enabled_attention:
                         att_tasks.append({
@@ -882,7 +942,6 @@ with col2:
                             'status': 'Pending'
                         })
                     
-                    status_container_att = st.empty()
                     def render_att_status():
                         content = "**Attention Queue:**\n\n"
                         for t in att_tasks:
@@ -890,50 +949,39 @@ with col2:
                             if t['status'] == 'Running': icon = "🔄"
                             elif t['status'] == 'Done': icon = "✅"
                             elif t['status'] == 'Error': icon = "❌"
-                            
                             content += f"{icon} **{t['algo']} ({t['att']})**\n\n"
-                        status_container_att.markdown(content)
-                    
-                    render_att_status()
-
-                    # Fix: params might need to be retrieved from Session or Globals
-                    # We assume globals were set during AutoRL, but if rerun happens, they might reset?
-                    # Best to ensure they are set.
-                    rl_pdm.EPISODES = best_agent.get('EPISODES', 100) # Fallback
-                    # Wait, 'res' doesn't store EPISODES. 
-                    # We should probably use the UI input 'episodes' which is available in scope.
-                    rl_pdm.EPISODES = episodes 
-                    rl_pdm.WEAR_THRESHOLD = st.session_state.get('wear_threshold', 285)
-                    
+                        phase3_status.markdown(content)
+                        
+                    # Run Phase 3
                     for i, t in enumerate(att_tasks):
-                        att_tasks[i]['status'] = 'Running'
+                        t['status'] = 'Running'
                         render_att_status()
                         
-                        # Clean Algo Name
+                        # Clean Algo Name (remove any existing suffix if present, though base shouldn't have one)
                         algo_base = t['algo'].split(' ')[0]
                         
-                        data_filename = st.session_state.get('data_filename', None)
                         res = rl_pdm.train_single_model(
                             data_path, 
                             algo_base, 
                             t['lr'], 
                             t['gamma'], 
-                            ui_callback_att,
+                            ui_callback_phase1, # Reuse callback
                             attention_type=t['att'],
-                            data_filename=data_filename
+                            data_filename=base_filename
                         )
                         st.session_state.training_results.append(res)
                         
                         if 'error' in res:
-                                att_tasks[i]['status'] = 'Error'
-                                st.error(f"Error training {t['algo']} ({t['att']}): {res['error']}")
-                                with st.expander("Traceback"):
-                                    st.code(res.get('traceback', ''))
+                            t['status'] = 'Error'
+                            st.error(f"Error training {t['algo']} ({t['att']}): {res['error']}")
                         else:
-                                att_tasks[i]['status'] = 'Done'
+                            t['status'] = 'Done'
                         render_att_status()
                     
-                    st.toast("✅ Attention Training Complete!", icon="✅")
+                    st.toast("✅ Full AutoRL Pipeline Complete!", icon="🚀")
+                    st.balloons()
+                    # Optional: Rerun to refresh the Comparison Tab with all results
+                    # time.sleep(1)
                     st.rerun()
 
     # COMPARISON TAB
@@ -987,6 +1035,80 @@ with col2:
                     ])
                 )
                 
+                # --- SAVE RESULTS BUTTON ---
+                if st.button("Save Results"):
+                    excel_file = "Model_Training_Results.xlsx"
+                    
+                    # Prepare data for export
+                    export_data = []
+                    
+                    # Determine next ID
+                    start_id = 0
+                    if os.path.exists(excel_file):
+                        try:
+                            existing_df = pd.read_excel(excel_file)
+                            if 'ID' in existing_df.columns and not existing_df.empty:
+                                start_id = existing_df['ID'].max() + 1
+                        except Exception as e:
+                            st.warning(f"Could not read existing file for ID increment: {e}")
+
+                    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    data_filename = st.session_state.get('data_filename', 'Unknown')
+                    
+                    for i, res in enumerate(valid_results):
+                        # Infer finite horizon
+                        # We don't strictly track FH vs Infinite in 'res' right now other than context
+                        # But typically AutoRL uses Finite Horizon (FH) if configured.
+                        # We'll default to 'FH' for now as per AutoRL context, or check params if available.
+                        # Assuming FH based on standard usage here.
+                        horizon_type = "FH" 
+                        
+                        row = {
+                            'ID': start_id + i,
+                            'Date': current_date,
+                            'Agent': res.get('Agent', 'Unknown'),
+                            'Training data': data_filename,
+                            'Episodes': rl_pdm.EPISODES, # Use global or retrieve if stored in res
+                            'Finite Horizon': horizon_type, 
+                            'LR': res.get('LR'),
+                            'Gamma': res.get('Gamma'),
+                            'Avg Wear Margin': res.get('Avg Wear Margin'),
+                            'Avg Reward': res.get('Avg Reward'),
+                            'Avg Violations': res.get('Avg Violations'),
+                            'Avg Replacements': res.get('Avg Replacements'),
+                            'T_ss': res.get('T_ss', 0),
+                            'Sigma_ss': res.get('Sigma_ss', 0),
+                            'Weighted Score': res.get('Weighted Score'),
+                            'Model file name': res.get('model_filename', '')
+                        }
+                        export_data.append(row)
+                    
+                    if export_data:
+                        new_df = pd.DataFrame(export_data)
+                        
+                        try:
+                            if os.path.exists(excel_file):
+                                # Append to existing
+                                # openpyxl is needed for reading/writing xlsx
+                                with pd.ExcelWriter(excel_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                                    # Load existing to find length? 
+                                    # Pandas 'overlay' mode might strictly overlay. 
+                                    # Safe bet: Read all, concat, write all. 'a' mode in pandas is tricky with overlay.
+                                    # Let's simple-path it: Read, Concat, Write.
+                                    pass # Logic handled below
+                                
+                                existing_df = pd.read_excel(excel_file)
+                                final_df = pd.concat([existing_df, new_df], ignore_index=True)
+                                final_df.to_excel(excel_file, index=False)
+                            else:
+                                new_df.to_excel(excel_file, index=False)
+                            
+                            st.success(f"✅ Results saved to **{excel_file}** ({len(export_data)} rows added).")
+                        except Exception as e:
+                            st.error(f"Error saving to Excel: {e}")
+                    else:
+                        st.warning("No data to save.")
+
                 # --- BEST AGENT COMPARISON ---
                 st.markdown("---")
                 st.subheader("Best Agent Comparison")
@@ -1224,28 +1346,27 @@ with col2:
             eval_results = st.session_state.eval_results
             eval_file_name = st.session_state.get('eval_file_name', 'Unknown')
             
-            st.subheader(f"Evaluation Results for Model: {st.session_state.eval_model_name}")
-            st.info(f"📁 Test Data File: **{eval_file_name}**")
+            st.header(f"Evaluation Results   ⏵   {st.session_state.eval_model_name}")
+            st.subheader(f'Test File: {eval_file_name}', divider=True)
+            # st.subheader(f'Agent: {st.session_state.eval_model_name} | Test File: {eval_file_name}')
+            # st.info(f"📁 Test Data File: **{eval_file_name}**")
             
             # Display model override warning if applicable
-            if eval_results.get('model_override', False):
-                st.warning(
-                    f"Replacement suggested at timestep {eval_results.get('override_timestep', 'N/A')}."
-                )
+            # if eval_results.get('model_override', False):
+                # st.warning(f"Replacement suggested at timestep {eval_results.get('override_timestep', 'N/A')}.")
             
             # Display IAR bounds if available
-            if 'IAR_lower' in eval_results and 'IAR_upper' in eval_results:
-                st.markdown(f"**Agent: {st.session_state.eval_model_name}**")
-                col_IAR1, col_IAR2, col_IAR3, col_IAR4 = st.columns(4)
-                with col_IAR1:
-                    # st.metric("Wear Threshold", f"{eval_results['wear_threshold']:.2f}", border=True)
-                    st.metric("Model", st.session_state.eval_model_name, height='content', border=True)
-                with col_IAR2:
-                    st.metric("Ideal Replacement Range", f"± {100.0*rl_pdm.IAR_RANGE:.2f}%", border=True)
-                with col_IAR3:
-                    st.metric("Test file", eval_file_name, border=True)
-                with col_IAR4:   
-                    st.metric("Evaluation Steps", len(eval_results['timesteps']), border=True)
+            # if 'IAR_lower' in eval_results and 'IAR_upper' in eval_results:
+            #     # st.markdown(f"**Agent: {st.session_state.eval_model_name}**")
+            #     col_IAR1, col_IAR2, col_IAR3, col_IAR4 = st.columns(4)
+            #     with col_IAR1:
+            #         st.metric("Wear Threshold", f"{eval_results['wear_threshold']:.2f}", border=True)
+            #     with col_IAR2:
+            #         st.metric("Ideal Replacement Range", f"± {100.0*rl_pdm.IAR_RANGE:.2f}%", border=True)
+            #     with col_IAR3:
+            #         st.metric("Test file", eval_file_name, border=True)
+            #     with col_IAR4:   
+            #         st.metric("Evaluation Steps", len(eval_results['timesteps']), border=True)
                    
             # Display metrics
             col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
